@@ -13,6 +13,7 @@ from test import models
 _MALICIOUS_CONTEXT_VALUE = "foo; DROP SCHEMA IF EXISTS PUBLIC CASCADE;"
 _USER_ID_QUERY = sqlalchemy.text("SELECT id FROM users ORDER BY id ASC")
 _NOOP_QUERY = sqlalchemy.text("SELECT 1;")
+_ERROR_QUERY = sqlalchemy.text("SELECT 1/0;")
 
 
 async def rls_setting(
@@ -94,7 +95,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(sqlalchemy.exc.DataError):
             async with rls_sess.begin():
                 async with rls_sess.bypass_rls():
-                    await rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
+                    await rls_sess.execute(_ERROR_QUERY)
         await rls_sess.close()
 
     async def test_exception_without_bypass_propagates(self):
@@ -102,7 +103,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         rls_sess = self._new_session()
         with self.assertRaises(sqlalchemy.exc.DataError):
             async with rls_sess.begin():
-                await rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
+                await rls_sess.execute(_ERROR_QUERY)
         await rls_sess.close()
 
     async def test_sql_exception_during_bypass_restores_state(self):
@@ -111,7 +112,7 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(sqlalchemy.exc.DataError):
             async with rls_sess.begin():
                 async with rls_sess.bypass_rls():
-                    await rls_sess.execute(sqlalchemy.text("SELECT 1/0;"))
+                    await rls_sess.execute(_ERROR_QUERY)
         # _rls_bypass flag must be cleared regardless of exception
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         # A new transaction should see no bypass
@@ -145,6 +146,50 @@ class AsyncRLSTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rls_sess._rls_bypass_depth, 0)
         async with rls_sess.begin():
             self.assertFalse(await rls_bypassed(rls_sess))
+        await rls_sess.close()
+
+    async def test_sql_error_caught_inside_bypass_context_restores_rls(self):
+        """SQL error caught inside bypass_rls via savepoint keeps bypass active;
+        RLS is correctly re-applied after the bypass context exits normally."""
+        rls_sess = self._new_session(account_id=1)
+        async with rls_sess.begin():
+            async with rls_sess.bypass_rls():
+                # Execute a no-op first so the bypass setting is flushed to
+                # PostgreSQL before the savepoint is created.  After the
+                # savepoint rolls back it will correctly restore bypass_rls=true.
+                await rls_sess.execute(_NOOP_QUERY)
+                # Catch the SQL error inside the bypass context using a savepoint
+                # so the outer transaction remains usable.
+                with self.assertRaises(sqlalchemy.exc.DataError):
+                    async with rls_sess.begin_nested():
+                        await rls_sess.execute(_ERROR_QUERY)
+                # Still inside bypass_rls: bypass must still be active and all
+                # rows should be visible.
+                self.assertTrue(await rls_bypassed(rls_sess))
+                all_ids = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+                self.assertEqual(all_ids, [1, 2])
+            # After the bypass context exits normally, RLS must be re-applied
+            # and only the rows belonging to account_id=1 should be visible.
+            restricted_ids = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(restricted_ids, [1])
+        await rls_sess.close()
+
+    async def test_sql_error_caught_outside_bypass_context_restores_rls(self):
+        """SQL error propagating out of bypass_rls is caught externally;
+        bypass depth resets to 0 and RLS data filtering works in the next
+        transaction."""
+        rls_sess = self._new_session(account_id=1)
+        with self.assertRaises(sqlalchemy.exc.DataError):
+            async with rls_sess.begin():
+                async with rls_sess.bypass_rls():
+                    # Error propagates out of both the bypass and begin contexts.
+                    await rls_sess.execute(_ERROR_QUERY)
+        # Bypass depth must be reset regardless of the exception path.
+        self.assertEqual(rls_sess._rls_bypass_depth, 0)
+        # In the next transaction RLS must filter rows to only account_id=1.
+        async with rls_sess.begin():
+            restricted_ids = list((await rls_sess.execute(_USER_ID_QUERY)).scalars())
+            self.assertEqual(restricted_ids, [1])
         await rls_sess.close()
 
     async def test_none_context_field_clears_rls_setting(self):
