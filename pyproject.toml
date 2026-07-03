@@ -13,17 +13,19 @@ source = "vcs"
 local_scheme = "no-local-version"
 
 [tool.hatch.metadata.hooks.vcs.urls]
-source_archive = "https://github.com/DelfinaCare/rls/archive/{commit_hash}.zip"
+source_archive = "https://github.com/phvv-me/rls/archive/{commit_hash}.zip"
 
 [project]
 name = "rls"
 dynamic = ["version"]
 authors = [
-  { name = "DelfinaCare", email = "open-source@delfina.com" }
+  { name = "Pedro Valois", email = "contact@phvv.me" },
+  { name = "DelfinaCare", email = "open-source@delfina.com" },
 ]
-description = "python sqlalchemy rls integration package for psql"
+description = "Declarative PostgreSQL row level security for SQLAlchemy and Alembic"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
+license = "MIT"
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
@@ -31,34 +33,36 @@ classifiers = [
 ]
 
 dependencies = [
-  "alembic >= 1.13.3",
-  "pydantic >= 2.9.1",
-  "sqlalchemy >= 2.0.34",
-  "starlette >= 0.49.1",
+  "alembic>=1.13.3",
+  "pydantic>=2.9.1",
+  "sqlalchemy>=2.0.34",
+  "sqlglot>=25",
 ]
 [project.optional-dependencies]
 dev = [
-  "fastapi >= 0.115.0",
-  "httpx >= 0.25.1",
-  "mypy >=1.11.2",
-  "psycopg >= 3.0",
-  "ruff >= 0.15.0",
-  "testing-postgresql >= 1.3.0",
-  "uvicorn >= 0.34.0",
+  "asyncpg>=0.30",
+  "mypy>=1.11.2",
+  "psycopg[binary]>=3.0",
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.15.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/DelfinaCare/rls"
-Issues = "https://github.com/DelfinaCare/rls/issues"
+Homepage = "https://github.com/phvv-me/rls"
+Issues = "https://github.com/phvv-me/rls/issues"
 
 [tool.mypy]
 
-[[tool.mypy.overrides]]
-module = "testing.*"
-ignore_missing_imports = true
+[tool.ruff]
+line-length = 99
 
 [tool.ruff.lint]
 extend-select = ["I"]
 
 [tool.ruff.lint.isort]
 force-single-line = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

@@ -16,7 +16,7 @@ jobs:
         fetch-tags: true
     - uses: actions/setup-python@v6
       with:
-        python-version: 3.14
+        python-version: "3.13"
         cache: pip
     - run: pip wheel --no-deps .
     - uses: actions/upload-artifact@v7
@@ -46,7 +46,10 @@ jobs:
   upload_wheel:
     needs: [build_wheel]
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published' && github.repository_owner == 'DelfinaCare'
+    # the `rls` name on PyPI is already claimed by upstream DelfinaCare/rls; this fork has not
+    # picked a distinct published name yet, so this job is gated on the same owner check as
+    # upstream's own (disabled) test-index job above until that is decided.
+    if: github.event_name == 'release' && github.event.action == 'published' && github.repository_owner == 'phvv-me'
     environment:
         name: pypi
         url: https://pypi.org/p/rls

@@ -1,6 +1,11 @@
 # rls
 
-Adds PostgreSQL row-level security (RLS) support to your Python application by extending `sqlalchemy` and `alembic`.
+Declarative PostgreSQL row level security for SQLAlchemy and Alembic.
+
+A fork of [DelfinaCare/rls](https://github.com/DelfinaCare/rls) (MIT), reworked from the ground up
+while keeping its public spirit: a model states its own row level security policies as
+`__rls_policies__`, and Alembic autogenerate creates, diffs, and drops them for you. See
+[Changes from upstream](#changes-from-upstream) for what moved and why.
 
 ---
 
@@ -12,197 +17,208 @@ pip install rls
 
 ## Usage
 
-### Defining Policies
+### Defining policies
 
-Attach `__rls_policies__` to any SQLAlchemy model to declare which RLS policies should apply to it. For a full working example see [`test/models.py`](test/models.py).
+Attach `__rls_policies__` to any SQLAlchemy mapped class to declare which policies apply to it. A
+policy names exactly one command, `select`, `insert`, `update`, or `delete`, never `ALL`: a `FOR
+ALL` policy's `USING` clause is also OR-ed into a table's `SELECT` visibility by Postgres, so a
+narrower write predicate would leak past a table's read predicate.
 
 ```python
-class User(Base):
-    __tablename__ = "users"
+from sqlalchemy import Column, ForeignKey, Integer, String
+from sqlalchemy.orm import DeclarativeBase, relationship
 
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
+import rls
 
-    __rls_policies__ = [
-        Permissive(
-            condition_args=[
-                ConditionArg(comparator_name="account_id", type=Integer),
-            ],
-            cmd=[Command.select, Command.update],
-            custom_expr=lambda x: column("id") == x,
-            custom_policy_name="equal_to_accountId_policy",
-        ),
-    ]
+
+class Base(DeclarativeBase):
+    pass
 
 
 class Item(Base):
     __tablename__ = "items"
 
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    description = Column(String)
+    id = Column(Integer, primary_key=True)
+    title = Column(String)
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
 
-    owner = relationship("User")
-
-    __rls_policies__ = [
-        Permissive(
-            condition_args=[
-                ConditionArg(comparator_name="account_id", type=Integer),
-            ],
-            cmd=[Command.select, Command.update],
-            custom_expr=lambda x: column("owner_id") == x,
-            custom_policy_name="equal_to_accountId_policy",
-        ),
-        Permissive(
-            condition_args=[
-                ConditionArg(comparator_name="account_id", type=Integer),
-            ],
-            cmd=[Command.select],
-            custom_expr=lambda x: column("owner_id") > x,
-            custom_policy_name="greater_than_accountId_policy",
-        ),
-        Permissive(
-            condition_args=[
-                ConditionArg(comparator_name="account_id", type=Integer),
-            ],
-            cmd=[Command.all],
-            custom_expr=lambda x: column("owner_id") <= x,
-            custom_policy_name="smaller_than_or_equal_accountId_policy",
-        ),
-    ]
+    def __rls_policies__(self=None) -> list[rls.Policy]:
+        owner = rls.current_setting("account_id", Integer(), prefix="app")
+        mine = Item.owner_id == owner
+        return [
+            rls.Policy(name="items_read", command=rls.Command.select, using=mine),
+            rls.Policy(name="items_insert", command=rls.Command.insert, check=mine),
+            rls.Policy(name="items_update", command=rls.Command.update, using=mine, check=mine),
+            rls.Policy(name="items_delete", command=rls.Command.delete, using=mine),
+        ]
 ```
 
-#### ConditionArg
+`__rls_policies__` may be a plain list (built from bare, table-unqualified `sqlalchemy.column()`
+stand-ins, the shape upstream used) or a zero-argument callable, as above, so a policy can reference
+a model's own mapped columns (`Item.owner_id`) instead: the callable form runs once the table
+actually exists, after SQLAlchemy has finished mapping the class.
 
-`ConditionArg` describes a variable that will be set on the PostgreSQL session before a query runs, allowing the policy expression to reference it.
+#### `current_setting`
 
-- `comparator_name`: the PostgreSQL session variable name
-- `type`: the SQLAlchemy type of the variable
+`rls.current_setting(name, type_, prefix)` reads a Postgres session variable (`SET LOCAL
+<prefix>.<name>`) as a scalar-subquery `InitPlan`, evaluated once per query rather than once per
+row. The GUC namespace is a parameter here, never a module constant, so more than one registry can
+share a process without colliding.
+
+#### Registering a declarative base
 
 ```python
-from sqlalchemy import Integer
+import rls
 
-ConditionArg(comparator_name="account_id", type=Integer)
+rls.register(Base)
 ```
 
-#### Commands
-
-`Command` is an enum of SQL operations a policy can target:
-
-| Value | Applies to |
-|---|---|
-| `select` | SELECT |
-| `insert` | INSERT |
-| `update` | UPDATE |
-| `delete` | DELETE |
-| `all` | all of the above |
-
-#### Expressions
-
-Policy expressions are lambdas that receive the `ConditionArg` value(s) and return a SQLAlchemy boolean expression. For example:
-
-```python
-from sqlalchemy import column
-
-lambda x: column("owner_id") == x
-```
-
-This restricts rows to those whose `owner_id` matches the value of `account_id` supplied in the session context.
+Call this once per declarative base during application setup, before Alembic autogenerate runs
+against it or before calling `rls.create_policies` directly. Pass `grant_role="my_app_role"` to also
+have every protected table `GRANT SELECT, INSERT, UPDATE, DELETE` to that role.
 
 #### Alembic
 
-RLS policies are stored as SQLAlchemy metadata and managed through Alembic migrations. In your `env.py`, call `register` to wire up your base:
+Importing `rls` registers its autogenerate operations, comparator, and renderers as a side effect;
+just make sure `rls` (and `rls.register(Base)`) is imported before `env.py` runs autogenerate:
 
 ```python
-from rls import register
+import rls
 
-register.base_wrapper(Base)
+rls.register(Base)
 target_metadata = Base.metadata
 ```
 
-You can then generate a revision and run `alembic upgrade head` as normal — the policies will be created or dropped automatically.
-For details on the custom Alembic operations used internally, see the [alembic docs](./alembic.md).
-If you are not using alembic, you can call `rls.create_policies` directly.
+Generate a revision and run `alembic upgrade head` as normal, policies are created, diffed, or
+dropped automatically. A table with no `FORCE ROW LEVEL SECURITY` (or no row security at all) gets
+the whole-table `op.apply_rls(...)` bootstrap; an already-protected table gets a per-policy diff
+instead, `op.create_rls_policy(...)`/`op.drop_rls_policy(...)`, so a single changed clause never
+reapplies an entire table's policy set.
+
+If you are not using Alembic, call `rls.create_policies(metadata, connection)` directly after
+`metadata.create_all()`.
 
 ---
 
-### Using Policies at Runtime
+### Using policies at runtime
 
-Policies are enforced through `RlsSession`, a drop-in replacement for SQLAlchemy's `Session`. You supply a Pydantic context object whose fields match the `comparator_name` values in your policies, plus a bound engine:
+Policies are enforced through `RlsSession`, a drop-in replacement for SQLAlchemy's `Session`. Supply
+a Pydantic context object whose fields match the names your policies read via `current_setting`,
+plus a bound engine:
 
 ```python
+from pydantic import BaseModel
+
+from rls import RlsSession
+
+
 class MyContext(BaseModel):
     account_id: int
-    provider_id: int
 
 
-context = MyContext(account_id=1, provider_id=2)
-session = RlsSession(context=context, bind=engine)
-
-res = session.execute(text("SELECT * FROM users")).fetchall()
-
-# Temporarily bypass RLS with a context manager
-with session.bypass_rls() as session:
-    res2 = session.execute(text("SELECT * FROM items")).fetchall()
+session = RlsSession(context=MyContext(account_id=1), guc_prefix="app", bind=engine)
+rows = session.execute(text("SELECT * FROM items")).fetchall()
 ```
 
-#### RlsSessioner
+`guc_prefix` (default `"rls"`) must match the prefix your policies were built with. There is no
+bypass branch baked into any policy by default; a policy that wants an escape hatch composes
+`rls.bypass_clause(prefix)` into its own `using`/`check` expression, and `session.bypass_rls()`
+opens a block where that flag reads `true`:
 
-For applications that build a session per request or operation, `RlsSessioner` wraps a `sessionmaker` and a `ContextGetter` to produce ready-to-use `RlsSession` instances.
+```python
+with session.bypass_rls() as session:
+    rows = session.execute(text("SELECT * FROM items")).fetchall()
+```
 
-- `sessionmaker`: a SQLAlchemy `sessionmaker` configured with `class_=RlsSession`
-- `context_getter`: a subclass of `ContextGetter` that constructs the context object from arbitrary `args`/`kwargs`
+#### `RlsSessioner`
+
+For an app that builds a session per request or operation, `RlsSessioner` wraps a `sessionmaker`
+(`class_=RlsSession`) and a `ContextGetter` subclass into a ready-to-use session factory. It takes
+no framework dependency; wrap it in your own framework's dependency-injection mechanism (FastAPI
+`Depends`, a Flask decorator, or a bare `with` block) as needed.
 
 ```python
 from sqlalchemy.orm import sessionmaker
-from rls.session import RlsSession
-from rls.rls_sessioner import RlsSessioner, ContextGetter
-from pydantic import BaseModel
-from test.engines import sync_engine as engine
-from sqlalchemy import text
+
+from rls import ContextGetter, RlsSession, RlsSessioner
 
 
-class ExampleContext(BaseModel):
-    account_id: int
-    provider_id: int
+class MyContextGetter(ContextGetter):
+    def get_context(self, *args, **kwargs) -> MyContext:
+        return MyContext(account_id=kwargs["account_id"])
 
 
-class ExampleContextGetter(ContextGetter):
-    def get_context(self, *args, **kwargs) -> ExampleContext:
-        return ExampleContext(
-            account_id=kwargs.get("account_id", 1),
-            provider_id=kwargs.get("provider_id", 2),
-        )
+session_maker = sessionmaker(class_=RlsSession, bind=engine)
+sessioner = RlsSessioner(sessionmaker=session_maker, context_getter=MyContextGetter())
 
-
-session_maker = sessionmaker(
-    class_=RlsSession, autoflush=False, autocommit=False, bind=engine
-)
-my_sessioner = RlsSessioner(sessionmaker=session_maker, context_getter=ExampleContextGetter())
-
-with my_sessioner(account_id=22, provider_id=99) as session:
-    res = session.execute(text("SELECT * FROM users")).fetchall()
-    print(res)  # users scoped to account_id=22, provider_id=99
-
-with my_sessioner(account_id=11, provider_id=44) as session:
-    res = session.execute(text("SELECT * FROM users")).fetchall()
-    print(res)  # users scoped to account_id=11, provider_id=44
+with sessioner(account_id=22) as session:
+    rows = session.execute(text("SELECT * FROM items")).fetchall()
 ```
 
 ---
 
-### Frameworks
+### Views over a protected table
 
-#### FastAPI
+A plain view runs as its owner, bypassing row level security on every table it selects from
+entirely; a view carries no rows or policies of its own to enforce. Postgres only lets a view defer
+to the querying role's own row level security starting with version 15, behind the
+`security_invoker` reloption. Any view over a table this library protects must set it:
 
-In a FastAPI application every endpoint that touches the database needs the correct RLS context derived from the incoming request (e.g. the authenticated user's `account_id`). Without a structured approach it is easy for individual routes to set the context inconsistently, or to forget to set it at all.
+```python
+import rls
 
-`fastapi_dependency_function` wraps an `RlsSessioner` as a FastAPI dependency so that the RLS context is populated from the request automatically and uniformly for every endpoint that declares it. The session injected into the handler already has the correct PostgreSQL session variables set, ensuring all queries are transparently scoped to the caller's data without any per-endpoint boilerplate.
+statement = rls.security_invoker_view("items_summary", "SELECT owner_id, count(*) FROM items GROUP BY owner_id")
+```
 
-For a complete runnable example see [`test/fastapi_sample.py`](test/fastapi_sample.py).
+Without `WITH (security_invoker = true)`, the view silently reintroduces exactly the leak row level
+security exists to close.
 
 ---
 
+### Verifying the live schema
+
+`rls.verify_rls(connection, expected, declared)` reads `pg_class`/`pg_policies` back and reports
+every way the live schema disagrees with what is declared, independent of any pending migration, a
+missing policy, one with a drifted clause, or a table that lost `FORCE`:
+
+```python
+violations = rls.verify_rls(connection, expected={"items"}, declared=Base.metadata.info["rls_policies"])
+assert violations == []
+```
+
+---
+
+## Changes from upstream
+
+- **Generic GUC namespace.** `current_setting`/`RlsSession` take the prefix as a parameter, never a
+  hardcoded `rls.` module constant, so more than one registry can share a process.
+- **No framework dependency.** No `starlette`/FastAPI import anywhere in the library; `RlsSessioner`
+  is framework-agnostic, wrap it in your own framework's DI as needed.
+- **`FORCE ROW LEVEL SECURITY` on every path.** Upstream only forced row security on its direct
+  `create_policies()` path, never through Alembic; without `FORCE`, the table's own owning role
+  still bypasses every policy. This fork emits it everywhere.
+- **One command per policy, never `FOR ALL`.** A `FOR ALL` policy's `USING` clause is also OR-ed
+  into `SELECT` visibility by Postgres, letting a write predicate leak into read visibility.
+- **No default bypass escape.** Upstream's `Policy.allow_bypass_rls=True` stitched a matching `OR`
+  branch into every generated policy whether wanted or not. `rls.bypass_clause` is available but
+  opt-in, a policy composes it explicitly.
+- **`sqlglot`-based clause comparison.** The Alembic comparator parses both the compiled policy
+  expression and the catalog's deparsed `qual`/`with_check` into ASTs (via `sqlglot`), folds casts,
+  parens, `= ANY (ARRAY[...])` vs `IN (...)`, and self-table qualification, then compares the
+  canonicalized SQL text, replacing a regex-based text fold.
+- **`ops/` as a folder**, not one file: `operations.py` (the `MigrateOperation` classes),
+  `implementations.py` (their DDL), `comparator.py` (the autogenerate diff), `renderer.py` (turning
+  a queued op back into migration source).
+- **Every op is self-contained.** `ApplyRlsOp`/`DropRlsOp`/`CreatePolicyOp`/`DropPolicyOp` all carry
+  their compiled policies inline; nothing in the Alembic layer reads a global metadata reference at
+  migration-run time.
+- **Pydantic models.** `Policy`, `CompiledPolicy`, `RlsSessioner`, and `AsyncRlsSessioner` are frozen
+  `pydantic.BaseModel`s rather than dataclasses or plain classes.
+- **`verify_rls`.** New: checks the live catalog against the declared registry directly, independent
+  of any pending migration, for a CI gate or a startup guard.
+- **`security_invoker_view`.** New: documents and codifies the `WITH (security_invoker = true)` rule
+  a view over a protected table must follow.
+
 ## LICENSE
+
 [MIT](./LICENSE)

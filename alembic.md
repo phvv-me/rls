@@ -1,85 +1,55 @@
-# Alembic Rls Docs
-This is a guide on how to setup and use alembic with the rls package.
+# Alembic integration
 
-## Setting up alembic
-alembic must be initialized by our extended metadata first to be used when creating policies.
+This is a guide to how `rls` plugs into Alembic; see the [README](./README.md) for the declarative
+`__rls_policies__` API most callers only ever need.
 
-the rls policies are registered as metadata info and can be used with alembic
+## Setting up Alembic
 
-in the `env.py` file you can use `register` to register your base, which is the recommended approach:
+Importing `rls` registers its operations, comparator, and renderers as a side effect. In your
+`env.py`, import `rls` and call `register` on your declarative base before autogenerate runs:
 
 ```python
-from rls import base_wrapper
+import rls
 
-register.base_wrapper(Base)
+rls.register(Base)
 target_metadata = Base.metadata
 ```
 
-## Creating Policies in alembic revisions
+## Operations available in a revision
 
+Four custom operations are available on the `op` proxy inside a migration:
 
-To create a policy in alembic revision `manually` you have to keep in mind the following custom alembic operations:
-- `op.create_policy` : to create a policy for a table
-- `op.drop_policy` : to drop a policy for a table
-- `op.enable_rls` : to enable row level security on a table
-- `op.disable_rls` : to disable row level security on a table
+- `op.apply_rls(table, policies, grant_role=None)`: force row level security on `table` and create
+  every policy in `policies`, in order. The whole-table bootstrap, used for a brand-new protected
+  table or one whose `FORCE`/`ENABLE` was stripped outside a migration.
+- `op.drop_rls(table, policies, grant_role=None)`: the reverse, dropping every policy in `policies`
+  and disabling row level security on `table`.
+- `op.create_rls_policy(table, policy)`: create or replace one named policy on an already-protected
+  table. Idempotent, implemented as drop-if-exists then create.
+- `op.drop_rls_policy(table, policy)`: drop one named policy from `table`.
 
-**Note**: `automatically` creating policies in alembic is supported by the package but it is recommended to always check them before running the upgrade head command
-
-### op.create_policy(table_name: str, policy_name: str, cmd: str, expr: str)
-Creates a policy for a table with the given name, definition, policy name, command, and expression
-
-```python
-from alembic import op
-op.create_policy(
-    table_name="accounts",
-    definition="PERMISSIVE",
-    policy_name="accounts_select",
-    cmd="select",
-    expr="true"
-)
-```
-
-### op.drop_policy(table_name: str, policy_name: str, cmd: str, expr: str)
-Drops a policy for a table with the given name, policy name, command, and expression
+`policies`/`policy` are `list[rls.CompiledPolicy]`/`rls.CompiledPolicy`, the plain-text compiled
+form (see `rls.compile_policy`), not the live `rls.Policy` a model declares. `typing.cast(rls.ops.RLSOp,
+op)` gives fully-typed access to all four from inside a migration file, no `# type: ignore` needed.
 
 ```python
 from alembic import op
+import rls
+import typing
 
-op.drop_policy(
-    table_name="accounts",
-    definition="PERMISSIVE",
-    policy_name="accounts_select",
-    cmd="select",
-    expr="true"
+typing.cast(rls.ops.RLSOp, op).apply_rls(
+    "accounts",
+    [rls.CompiledPolicy(name="accounts_select", command=rls.Command.select, using="true")],
 )
 ```
 
-**Note**: the `expr`, `cmd`, `definition` are not used in the drop operation but it is required to be passed for reverse compatibility
-
-
-### op.enable_rls(table_name: str)
-Enables row level security on a table with the given name
-
-```python
-from alembic import op
-
-op.enable_rls(
-    table_name="accounts"
-)
-```
-
-### op.disable_rls(table_name: str)
-Disables row level security on a table with the given name
-
-```python
-from alembic import op
-
-op.disable_rls(
-    table_name="accounts"
-)
-```
-
+`autogenerate` picks a granularity automatically: a table missing `FORCE`/`ENABLE` gets the
+whole-table `apply_rls`/`drop_rls` bootstrap; an already-protected table with only some policies
+drifted gets the fine-grained `create_rls_policy`/`drop_rls_policy` instead, so a single changed
+clause never reapplies an entire table's policy set. Automatically generated migrations should
+still be read before running `alembic upgrade head`.
 
 ## Limitations
-- All custom operations are not picked up by mypy and will throw an error when type checked.
+
+- These four operations are not picked up by static type checkers on the bare `op` proxy; use
+  `typing.cast(rls.ops.RLSOp, op)` to get typed access inside a migration file.

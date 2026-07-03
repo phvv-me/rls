@@ -1,3 +1,13 @@
+"""Drop-in `Session`/`AsyncSession` that stamp Postgres GUCs from a context object before every query.
+
+Ported from DelfinaCare/rls (MIT, https://github.com/DelfinaCare/rls), whose `RlsSession` hardcoded
+the `rls.` GUC prefix and always injected an `rls.bypass_rls` reset into the setup statement, whether
+any policy in the schema ever read it or not. This port takes the GUC prefix and the bypass flag's
+own name as constructor arguments (so more than one registry can share a process without colliding
+namespaces), and `bypass_rls()` sets a GUC a policy must explicitly opt into via
+`rls.guc.bypass_clause` rather than one every generated policy carried by default.
+"""
+
 from collections import abc
 
 import pydantic
@@ -20,37 +30,35 @@ def _context_to_value_params(
 ) -> dict[str, str]:
     if context is None or not keys:
         return {}
-    return {
-        f"value_{key}": "" if (x := getattr(context, key)) is None else str(x)
-        for key in keys
-    }
+    return {f"value_{key}": "" if (x := getattr(context, key)) is None else str(x) for key in keys}
 
 
-def _set_statement_template(keys: list[str]) -> sqlalchemy.Select:
-    """
-    Pre-computes the SQL template for setting RLS config values at init time.
+def _set_statement_template(keys: list[str], prefix: str, bypass_flag: str) -> sqlalchemy.Select:
+    """Pre-compute the SQL template for setting every RLS config value, once, at init time.
 
-    The SQLAlchemy select() expression with literal setting names and named
-    bind parameters for the values is built once and stored.  Each call to
-    _get_set_statement() then only needs to substitute the current field
-    values into this template, which is significantly cheaper than rebuilding
-    the entire statement every time.
+    The `select()` expression with literal setting names and named bind parameters for the values
+    is built once and stored; each call to `_get_set_statement` then only substitutes the current
+    field values, cheaper than rebuilding the whole statement per call.
+
+    keys: context field names to build a `set_config` call for.
+    prefix: the GUC namespace this session claims.
+    bypass_flag: name of the bypass GUC under `prefix`, reset to `false` on every template use.
     """
     set_config_calls = [
         sqlalchemy.func.set_config(
-            sqlalchemy.literal("rls.bypass_rls"),
+            sqlalchemy.literal(f"{prefix}.{bypass_flag}"),
             sqlalchemy.literal("false"),
             sqlalchemy.false(),
         )
     ]
     for key in keys:
-        if key == "bypass_rls":
-            raise ValueError("Context field names cannot be 'bypass_rls'")
-        # Bind parameters are named after the field (e.g. setting_account_id,
-        # value_account_id) so the mapping is explicit and not order-dependent.
+        if key == bypass_flag:
+            raise ValueError(f"context field names cannot be {bypass_flag!r}")
+        # bind parameters are named after the field (e.g. setting_account_id, value_account_id) so
+        # the mapping is explicit and not order-dependent.
         set_config_calls.append(
             sqlalchemy.func.set_config(
-                sqlalchemy.literal(f"rls.{key}"),
+                sqlalchemy.literal(f"{prefix}.{key}"),
                 sqlalchemy.bindparam(f"value_{key}"),
                 sqlalchemy.false(),
             )
@@ -59,32 +67,41 @@ def _set_statement_template(keys: list[str]) -> sqlalchemy.Select:
 
 
 class _RlsSessionMixin:
-    """Shared logic for RlsSession and AsyncRlsSession."""
+    """Shared logic for `RlsSession` and `AsyncRlsSession`."""
 
-    def __init__(self, context: pydantic.BaseModel | None = None, *args, **kwargs):
+    def __init__(
+        self,
+        context: pydantic.BaseModel | None = None,
+        guc_prefix: str = "rls",
+        bypass_flag: str = "bypass_rls",
+        *args,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
-        self._rls_bypass_depth = 0  # Track RLS bypass nesting depth
+        self._rls_bypass_depth = 0
         self._rls_dirty = True
         self._rls_last_set_context_snapshot: pydantic.BaseModel | None = None
         self._context = context
+        self._guc_prefix = guc_prefix
+        self._bypass_flag = bypass_flag
         self._rls_context_is_immutable = _is_context_immutable(context)
         self._rls_context_keys: list[str] = (
             list(type(self._context).model_fields.keys()) if self._context else []
         )
-        self._rls_set_template = _set_statement_template(self._rls_context_keys)
+        self._rls_set_template = _set_statement_template(
+            self._rls_context_keys, guc_prefix, bypass_flag
+        )
 
     def _get_set_statement(self) -> sqlalchemy.Executable | None:
-        """
-        Returns the SQL statement to set all RLS config values.
+        """Return the SQL statement to set all RLS config values, or `None` when nothing changed.
 
-        The SQL template was pre-computed at init time; here we only substitute
-        the current field values.  None values are stored as an empty string so
-        that the RLS policy expressions (which wrap current_setting() with
-        NULLIF(..., '')) treat them as NULL and filter out all rows.
+        The SQL template was pre-computed at init time; here we only substitute the current field
+        values. `None` values are stored as an empty string so that a policy expression wrapping
+        `current_setting()` with `NULLIF(..., '')` treats them as `NULL` and filters out every row.
         """
         if self._rls_bypass_depth > 0:
             if self._rls_dirty:
-                return sqlalchemy.text("SET LOCAL rls.bypass_rls = true;")
+                return sqlalchemy.text(f"SET LOCAL {self._guc_prefix}.{self._bypass_flag} = true;")
             return None
         if not self._rls_dirty:
             if self._rls_context_is_immutable:
@@ -101,22 +118,15 @@ class _RlsSessionMixin:
 
 
 class RlsSessionTransaction:
-    """Wraps :class:`~sqlalchemy.orm.SessionTransaction` so that every
-    commit / rollback marks the owning :class:`RlsSession` as *dirty*,
-    ensuring RLS configuration is re-applied on the next statement.
+    """Wraps `orm.SessionTransaction` so every commit/rollback marks the owning session dirty.
+
+    Composition rather than inheritance, since `SessionTransaction` is instantiated internally by
+    `Session.begin()` with private state (origin, parent chain, snapshot); the already-constructed
+    instance is wrapped rather than a new subclass instance created, so delegation is the only
+    viable approach.
     """
 
-    # Composition is used instead of inheritance because ``SessionTransaction``
-    # is instantiated internally by ``Session.begin()`` with private state
-    # (``SessionTransactionOrigin``, parent chain, snapshot).  We need to wrap
-    # the already-constructed instance rather than create a new subclass
-    # instance, so delegation is the only viable approach.
-
-    def __init__(
-        self,
-        transaction: orm.SessionTransaction,
-        session: "RlsSession",
-    ) -> None:
+    def __init__(self, transaction: orm.SessionTransaction, session: "RlsSession") -> None:
         self._transaction = transaction
         self._session = session
 
@@ -163,31 +173,14 @@ class RlsSessionTransaction:
 
 
 class RlsAsyncSessionTransaction:
-    """Wraps :class:`~sqlalchemy.ext.asyncio.AsyncSessionTransaction` so that
-    every commit / rollback marks the owning :class:`AsyncRlsSession` as
-    *dirty*, ensuring RLS configuration is re-applied on the next statement.
+    """Wraps `sa_asyncio.AsyncSessionTransaction` so every commit/rollback marks the session dirty.
+
+    Composition rather than inheritance, for the same reason as `RlsSessionTransaction`. Its shape
+    differs from the sync wrapper in ways the underlying `AsyncSessionTransaction` API requires:
+    no `close()` or `parent` (absent on the async class too), and an explicit `start()`/`__await__`
+    pair instead of implicit begin-on-`__enter__`, letting the wrapper be both awaited directly and
+    used as an async context manager.
     """
-
-    # Composition is used instead of inheritance because
-    # ``AsyncSessionTransaction`` is instantiated internally by
-    # ``AsyncSession.begin()`` with private state.  We need to wrap the
-    # already-constructed instance rather than create a new subclass instance,
-    # so delegation is the only viable approach.
-
-    # Differences from :class:`RlsSessionTransaction` that are required by the
-    # underlying ``AsyncSessionTransaction`` API:
-
-    # * ``close()`` is absent — ``AsyncSessionTransaction`` has no ``close()``
-    #   method (unlike the sync ``SessionTransaction``).
-    # * ``parent`` is absent — ``AsyncSessionTransaction`` has no ``parent``
-    #   property (unlike the sync ``SessionTransaction``).
-    # * ``start()`` / ``__await__`` are present — ``AsyncSessionTransaction``
-    #   uses an explicit async-start pattern rather than ``__enter__``, allowing
-    #   the object to be both awaited directly and used as an async context
-    #   manager (see ``start`` and ``__await__`` below).
-    # * ``sync_transaction`` is present — async-only property that exposes the
-    #   underlying sync ``SessionTransaction`` (no equivalent exists in the sync
-    #   wrapper).
 
     def __init__(
         self,
@@ -198,23 +191,11 @@ class RlsAsyncSessionTransaction:
         self._session = session
 
     async def start(self, is_ctxmanager: bool = False) -> "RlsAsyncSessionTransaction":
-        # Unlike the sync SessionTransaction which begins implicitly via
-        # __enter__, AsyncSessionTransaction exposes an explicit start() method.
-        # The is_ctxmanager flag tells SQLAlchemy whether the transaction was
-        # entered through an async context manager (True) or awaited directly
-        # (False), allowing both usage patterns:
-        #   async with session.begin() as tx: ...   # context-manager usage
-        #   tx = await session.begin()              # direct-await usage
         await self._transaction.start(is_ctxmanager=is_ctxmanager)
         self._session._rls_dirty = True
         return self
 
-    def __await__(
-        self,
-    ) -> abc.Generator[object, object, "RlsAsyncSessionTransaction"]:
-        # AsyncSessionTransaction (unlike the sync SessionTransaction) supports
-        # being awaited directly in addition to being used as an async context
-        # manager.  This makes ``tx = await session.begin()`` possible.
+    def __await__(self) -> abc.Generator[object, object, "RlsAsyncSessionTransaction"]:
         return self.start().__await__()
 
     async def __aenter__(self) -> "RlsAsyncSessionTransaction":
@@ -235,9 +216,7 @@ class RlsAsyncSessionTransaction:
         self._session._rls_dirty = True
 
     async def prepare(self) -> None:
-        # AsyncSessionTransaction has no prepare() method (unlike the sync
-        # SessionTransaction).  AsyncRlsSession.prepare() is called instead,
-        # which uses run_sync() to invoke the underlying sync Session.prepare().
+        # AsyncSessionTransaction has no prepare(); AsyncRlsSession.prepare() runs it via run_sync.
         await self._session.prepare()
 
     @property
@@ -254,10 +233,6 @@ class RlsAsyncSessionTransaction:
 
     @property
     def sync_transaction(self) -> orm.SessionTransaction | None:
-        # Async-only property: exposes the underlying sync SessionTransaction
-        # that AsyncSessionTransaction wraps.  There is no equivalent in the
-        # sync RlsSessionTransaction because SessionTransaction is itself the
-        # "sync transaction" and wraps no further layer.
         return self._transaction.sync_transaction
 
 
@@ -297,7 +272,6 @@ class AsyncBypassRLSContext:
 
 class RlsSession(_RlsSessionMixin, orm.Session):
     def _execute_set_statements(self):
-        """Executes the RLS SET statement if present."""
         if (stmt := self._get_set_statement()) is not None:
             super().execute(stmt)
             self._rls_dirty = False
@@ -326,20 +300,23 @@ class RlsSession(_RlsSessionMixin, orm.Session):
         self._rls_dirty = True
 
     def bypass_rls(self) -> BypassRLSContext:
+        """Open a block where `<guc_prefix>.<bypass_flag>` reads `true`, an opt-in escape.
+
+        Only affects a query if some declared policy actually `OR`s in
+        `rls.guc.bypass_clause(prefix, name)`; a schema that never composes that helper into a
+        policy is entirely unaffected by this context manager.
+        """
         return BypassRLSContext(self)
 
 
 class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
     async def _execute_set_statements(self):
-        """Executes the RLS SET statement if present."""
         if (stmt := self._get_set_statement()) is not None:
             await super().execute(stmt)
             self._rls_dirty = False
 
     def begin(self) -> RlsAsyncSessionTransaction:  # type: ignore[override]
-        # AsyncSession.begin() does not accept a nested parameter (unlike
-        # sync Session.begin(nested=False)).  To create nested transactions
-        # (savepoints) in async code, use begin_nested() instead.
+        # AsyncSession.begin() takes no nested parameter; use begin_nested() for savepoints.
         return RlsAsyncSessionTransaction(super().begin(), self)
 
     async def execute(self, *args, **kwargs):
@@ -363,11 +340,9 @@ class AsyncRlsSession(_RlsSessionMixin, sa_asyncio.AsyncSession):
         self._rls_dirty = True
 
     async def prepare(self) -> None:
-        # AsyncSession has no prepare() method (unlike sync Session, which
-        # exposes Session.prepare() directly).  This override is required so
-        # that RlsAsyncSessionTransaction.prepare() has a target to call; it
-        # uses run_sync() to invoke the underlying sync Session.prepare().
+        # AsyncSession has no prepare(); run the sync Session.prepare() through run_sync().
         await self.run_sync(lambda sess: sess.prepare())
 
     def bypass_rls(self) -> AsyncBypassRLSContext:
+        """Async counterpart to `RlsSession.bypass_rls()`."""
         return AsyncBypassRLSContext(self)
