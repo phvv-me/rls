@@ -10,21 +10,12 @@ mapper-construction hook fires, letting a policy reference a model's own mapped 
 upstream's bare `sqlalchemy.column("name")` stand-ins.
 """
 
-import typing
-
 from sqlalchemy import Table
 from sqlalchemy import event
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapper
-from sqlalchemy.sql.schema import MetaData
 
 from .policy import Policy
-
-
-class _MappedClass(typing.Protocol):
-    """The one attribute this module needs from a mapped class: its own metadata registry."""
-
-    metadata: MetaData
 
 
 def _declared_policies(class_: type) -> list[Policy] | None:
@@ -47,23 +38,26 @@ def _declared_policies(class_: type) -> list[Policy] | None:
 def _register_declared_policies(mapper: Mapper, class_: type) -> None:
     """Read a freshly mapped class's declared policies into its own metadata's registry.
 
-    Fires for every mapped class in the process, scoped by checking the class's own metadata
-    rather than a hardcoded base, so this one global listener serves every registry `register()`
-    has opted in without needing a listener per base. A metadata `register()` has not yet touched
-    (no `"rls_policies"` key in `metadata.info`) is left alone, and so is a class with no
-    `__rls_policies__` of its own.
+    Fires for every mapped class in the process, scoped by checking the mapped table's own
+    metadata rather than a hardcoded base, so this one global listener serves every registry
+    `register()` has opted in without needing a listener per base. The table's metadata, not
+    `class_.metadata`, is the source of truth here: an imperatively mapped class
+    (`registry.map_imperatively(cls, table)`, the shape a read-only view like a SQL `VIEW` often
+    uses) carries no `metadata` attribute of its own at all, only its mapped `Table` does. A
+    metadata `register()` has not yet touched (no `"rls_policies"` key in `metadata.info`) is left
+    alone, and so is a class with no `__rls_policies__` of its own.
 
     mapper: the mapper SQLAlchemy just finished constructing.
     class_: the mapped class the mapper belongs to.
     """
-    metadata = typing.cast(_MappedClass, class_).metadata
+    local_table = mapper.local_table
+    assert isinstance(local_table, Table), "a mapped class's local_table is always its own Table"
+    metadata = local_table.metadata
     if "rls_policies" not in metadata.info:
         return
     policies = _declared_policies(class_)
     if policies is None:
         return
-    local_table = mapper.local_table
-    assert isinstance(local_table, Table), "a mapped class's local_table is always its own Table"
     metadata.info["rls_policies"][local_table.name] = policies
 
 
