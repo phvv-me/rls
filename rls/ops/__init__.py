@@ -10,7 +10,12 @@ contract any `env.py` that imports `rls` before running autogenerate relies on.
 
 from . import comparator as comparator
 from . import implementations as implementations
+from . import scoped as scoped
 from .comparator import compare_rls
+from .implementations import run_apply_rls
+from .implementations import run_create_policy
+from .implementations import run_drop_policy
+from .implementations import run_drop_rls
 from .operations import ApplyRlsOp
 from .operations import CreatePolicyOp
 from .operations import DropPolicyOp
@@ -20,16 +25,38 @@ from .renderer import render_apply_rls
 from .renderer import render_create_policy
 from .renderer import render_drop_policy
 from .renderer import render_drop_rls
+from .scoped import ApplyScopedRlsOp
+from .scoped import DropScopedRlsOp
+from .scoped import compare_scoped_rls
+from .scoped import render_apply_scoped_rls
+from .scoped import render_drop_scoped_rls
+from .scoped import run_apply_scoped_rls
+from .scoped import run_drop_scoped_rls
+from .scoped import scoped_apply_statements
+from .scoped import scoped_drop_statements
 
 __all__ = [
     "RLSOp",
     "ApplyRlsOp",
+    "ApplyScopedRlsOp",
     "CreatePolicyOp",
     "DropPolicyOp",
     "DropRlsOp",
+    "DropScopedRlsOp",
     "compare_rls",
+    "compare_scoped_rls",
     "render_apply_rls",
+    "render_apply_scoped_rls",
     "render_create_policy",
     "render_drop_policy",
     "render_drop_rls",
+    "render_drop_scoped_rls",
+    "run_apply_rls",
+    "run_apply_scoped_rls",
+    "run_create_policy",
+    "run_drop_policy",
+    "run_drop_rls",
+    "run_drop_scoped_rls",
+    "scoped_apply_statements",
+    "scoped_drop_statements",
 ]

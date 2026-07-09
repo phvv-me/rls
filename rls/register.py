@@ -8,6 +8,11 @@ other) and additionally accepts `__rls_policies__` as a zero-argument callable, 
 list: a callable can reach `cls.__table__.c`, the table SQLAlchemy has by the time this
 mapper-construction hook fires, letting a policy reference a model's own mapped columns instead of
 upstream's bare `sqlalchemy.column("name")` stand-ins.
+
+Beyond upstream, this port also stamps every policy-declaring table's name into
+`metadata.info["rls"]`, a set consumers read as the definitive protected-table set (a tenant guard,
+a startup verify, a CI drift check), and remembers the base's metadata with `rls.registry` so a
+table-name-only `op.apply_scoped_rls` can recover its policies at invoke time.
 """
 
 from sqlalchemy import Table
@@ -16,6 +21,7 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapper
 
 from .policy import Policy
+from .registry import remember_metadata
 
 
 def _declared_policies(class_: type) -> list[Policy] | None:
@@ -59,6 +65,7 @@ def _register_declared_policies(mapper: Mapper, class_: type) -> None:
     if policies is None:
         return
     metadata.info["rls_policies"][local_table.name] = policies
+    metadata.info.setdefault("rls", set()).add(local_table.name)
 
 
 def register(base: type[DeclarativeBase], grant_role: str | None = None) -> type[DeclarativeBase]:
@@ -72,11 +79,18 @@ def register(base: type[DeclarativeBase], grant_role: str | None = None) -> type
 
     base: the `DeclarativeBase` (or `SQLModel`) subclass whose registry to scan.
     grant_role: role every protected table should `GRANT` CRUD to, stored on the metadata for
-        `create_policies` and the Alembic comparator to read; omit when nothing should be granted.
+        `create_policies`, the scoped ops, and the Alembic comparator to read; omit when nothing
+        should be granted.
     """
     base.metadata.info.setdefault("rls_policies", {})
+    base.metadata.info.setdefault("rls", set())
     if grant_role is not None:
         base.metadata.info["rls_grant_role"] = grant_role
-    for mapper in base.registry.mappers:
+    remember_metadata(base.metadata)
+    # `_sa_registry` rather than the public `.registry`: a `SQLModel` base's pydantic metaclass
+    # shadows `.registry` (its `__getattr__` raises), while the `_sa_registry` SQLAlchemy's own
+    # declarative machinery stamps is present and identical on a plain `DeclarativeBase` and a
+    # `SQLModel` base alike, so this one path scans either kind of base's already-mapped classes.
+    for mapper in base._sa_registry.mappers:
         _register_declared_policies(mapper, mapper.class_)
     return base

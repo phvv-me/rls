@@ -17,6 +17,7 @@ from .policy import Command
 from .policy import CompiledPolicy
 from .policy import Policy
 from .policy import compile_expression
+from .registry import declared_policies
 
 
 def live_security(connection: Connection, tables: set[str]) -> dict[str, tuple[bool, bool]]:
@@ -184,3 +185,24 @@ def verify_rls(
                     f"{table}: {declared_policy.name} clause does not scope correctly"
                 )
     return violations
+
+
+def verify_scoped_rls(
+    connection: Connection,
+    expected: set[str],
+    declared: dict[str, list[Policy]] | None = None,
+) -> list[str]:
+    """Reasons the live schema fails the no-leak contract for any expected table.
+
+    A thin default over `verify_rls`: with no explicit `declared` it reads the merged policy set
+    every registered metadata declares (`rls.registry.declared_policies`), so a caller checks the
+    live catalog against exactly what `register()` opted in without threading the registry through
+    by hand.
+
+    connection: synchronous connection used to read the catalog.
+    expected: table names to verify, typically a metadata's own `info["rls"]` set.
+    declared: `table -> policies` to verify against, the merged registered registry by default; a
+        test passes its own mapping to verify a synthetic table carrying no registered model.
+    """
+    registry = declared if declared is not None else declared_policies()
+    return verify_rls(connection, expected, declared=registry)
