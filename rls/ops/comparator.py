@@ -27,9 +27,9 @@ from ..policy import Command
 from ..policy import CompiledPolicy
 from ..policy import Policy
 from ..policy import compile_policy
-from ..verify import drifted_policies
-from ..verify import live_policies
-from ..verify import live_security
+from ..schema import drifted_policies
+from ..schema import live_policies
+from ..schema import live_security
 from .operations import ApplyRlsOp
 from .operations import CreatePolicyOp
 from .operations import DropPolicyOp

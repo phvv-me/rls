@@ -24,9 +24,9 @@ from sqlalchemy.sql.schema import MetaData
 from ..policy import compile_policy
 from ..policy import disable_statements
 from ..policy import enable_statements
-from ..registry import metadata_for_table
-from ..verify import drifted_policies
-from ..verify import unprotected_tables
+from ..schema import drifted_policies
+from ..schema import metadata_for_table
+from ..schema import unprotected_tables
 from .operations import CreatePolicyOp
 from .operations import DropPolicyOp
 

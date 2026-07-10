@@ -12,8 +12,8 @@ import sqlalchemy as sa
 from sqlalchemy.engine import Connection
 from sqlalchemy.sql.schema import MetaData
 
-from .policy import compile_policy
-from .policy import enable_statements
+from ..policy import compile_policy
+from ..policy import enable_statements
 
 
 def create_policies(metadata: MetaData, connection: Connection) -> None:

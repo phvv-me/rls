@@ -4,9 +4,14 @@ Forked from DelfinaCare/rls (MIT, https://github.com/DelfinaCare/rls; see `LICEN
 from the ground up: `FORCE ROW LEVEL SECURITY` is emitted on every path, not only the direct
 `create_policies` one; a policy guards exactly one SQL command rather than a leaky `FOR ALL`; the
 GUC namespace is a parameter, not a hardcoded `rls.` prefix; no bypass escape is baked into a
-policy unless it opts in explicitly; there is no `starlette`/FastAPI dependency; and the Alembic
-comparator canonicalizes a catalog's deparsed clause through `sqlglot` before diffing it against a
-freshly compiled one, rather than a hand-rolled regex fold.
+policy unless it opts in explicitly; and the Alembic comparator canonicalizes a catalog's deparsed
+clause through `sqlglot` before diffing it against a freshly compiled one, rather than a hand-rolled
+regex fold.
+
+The package reads by concern: `policy` holds the policy model and its compiled and DDL forms,
+`session` the runtime session binding and GUC helpers, `schema` the declarative registration plus
+the schema-application and verification wiring, and `ops` the Alembic autogenerate integration.
+Every name below re-exports one of those, so `import rls` keeps its flat surface unchanged.
 
 Importing this package registers its Alembic operations, comparator, and renderers as a side
 effect, the contract any `env.py` that imports `rls` before running autogenerate relies on. Call
@@ -15,11 +20,6 @@ read as classes are mapped.
 """
 
 from . import ops as ops
-from . import registry as registry
-from .create import create_policies
-from .guc import bypass_clause
-from .guc import current_setting
-from .normalize import normalize_expression
 from .ops import ApplyScopedRlsOp
 from .ops import CreatePolicyOp
 from .ops import DropPolicyOp
@@ -44,24 +44,42 @@ from .policy import create_statement
 from .policy import disable_statements
 from .policy import drop_statement
 from .policy import enable_statements
-from .register import register
-from .registry import declared_policies
-from .registry import metadata_for_table
-from .roles import app_role_statements
+from .policy import normalize as normalize
+from .policy import normalize_expression
+from .schema import app_role_statements
+from .schema import clause_matches
+from .schema import create as create
+from .schema import create_policies
+from .schema import declared_policies
+from .schema import drifted_policies
+from .schema import live_policies
+from .schema import live_security
+from .schema import metadata_for_table
+from .schema import policy_matches
+from .schema import register
+from .schema import registry as registry
+from .schema import roles as roles
+from .schema import security_invoker_view
+from .schema import unprotected_tables
+from .schema import verify as verify
+from .schema import verify_rls
+from .schema import verify_scoped_rls
+from .schema import views as views
 from .session import AsyncRlsSession
+from .session import AsyncRlsSessioner
+from .session import ContextGetter
 from .session import RlsSession
-from .sessioner import AsyncRlsSessioner
-from .sessioner import ContextGetter
-from .sessioner import RlsSessioner
-from .verify import clause_matches
-from .verify import drifted_policies
-from .verify import live_policies
-from .verify import live_security
-from .verify import policy_matches
-from .verify import unprotected_tables
-from .verify import verify_rls
-from .verify import verify_scoped_rls
-from .views import security_invoker_view
+from .session import RlsSessioner
+from .session import bypass_clause
+from .session import current_setting
+from .session import guc as guc
+from .session import sessioner as sessioner
+
+# The three concern subpackages carry the flat-module names the public surface has always exposed
+# (`rls.verify`, `rls.guc`, ...), re-bound above so `import rls; rls.verify.live_policies` still
+# resolves. `schema` is the one grouping name new to this layout, so drop the binding the imports
+# above leaked onto the package to keep `dir(rls)` exactly what consumers saw before the split.
+globals().pop("schema", None)
 
 __all__ = [
     "ApplyScopedRlsOp",

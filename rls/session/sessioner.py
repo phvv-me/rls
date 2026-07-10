@@ -18,7 +18,8 @@ import pydantic
 from sqlalchemy import orm
 from sqlalchemy.ext import asyncio as sa_asyncio
 
-from . import session
+from .session import AsyncRlsSession
+from .session import RlsSession
 
 
 class ContextGetter(abc.ABC):
@@ -43,7 +44,7 @@ class RlsSessioner(pydantic.BaseModel):
 
     @pydantic.model_validator(mode="after")
     def _check_session_class(self) -> "RlsSessioner":
-        if not issubclass(self.sessionmaker.class_, session.RlsSession):
+        if not issubclass(self.sessionmaker.class_, RlsSession):
             raise ValueError("sessionmaker class must be RlsSession or a subclass of RlsSession")
         return self
 
@@ -75,7 +76,7 @@ class AsyncRlsSessioner(pydantic.BaseModel):
 
     @pydantic.model_validator(mode="after")
     def _check_session_class(self) -> "AsyncRlsSessioner":
-        if not issubclass(self.sessionmaker.class_, session.AsyncRlsSession):
+        if not issubclass(self.sessionmaker.class_, AsyncRlsSession):
             raise ValueError(
                 "sessionmaker class must be AsyncRlsSession or a subclass of AsyncRlsSession"
             )

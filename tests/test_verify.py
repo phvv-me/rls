@@ -1,8 +1,8 @@
 import sqlalchemy as sa
 
 import rls
-from rls.verify import clause_matches
-from rls.verify import policy_matches
+from rls import clause_matches
+from rls import policy_matches
 
 OWNER_ID = sa.column("owner_id", sa.Uuid())
 READ_USING = OWNER_ID == sa.literal("11111111-1111-1111-1111-111111111111")

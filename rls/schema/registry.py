@@ -10,7 +10,7 @@ declares the table. `register()` appends each base's metadata here once, and the
 
 from sqlalchemy.sql.schema import MetaData
 
-from .policy import Policy
+from ..policy import Policy
 
 # every metadata `register()` opted into row level security, in registration order. A duplicate
 # append is skipped so calling `register()` twice on one base never double-lists its metadata.

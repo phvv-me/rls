@@ -12,11 +12,11 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 from sqlalchemy.sql.elements import ColumnElement
 
-from .normalize import normalize_expression
-from .policy import Command
-from .policy import CompiledPolicy
-from .policy import Policy
-from .policy import compile_expression
+from ..policy import Command
+from ..policy import CompiledPolicy
+from ..policy import Policy
+from ..policy import compile_expression
+from ..policy import normalize_expression
 from .registry import declared_policies
 
 

@@ -1,6 +1,6 @@
 import pytest
 
-from rls.normalize import normalize_expression
+from rls import normalize_expression
 
 # each case documents one re-serialization Postgres is free to perform on a stored policy's
 # `qual`/`with_check`; the sqlglot-based normalizer must fold both sides to the same text.

@@ -20,7 +20,7 @@ from sqlalchemy import event
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapper
 
-from .policy import Policy
+from ..policy import Policy
 from .registry import remember_metadata
 
 
