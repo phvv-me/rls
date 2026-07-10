@@ -11,15 +11,10 @@ source = "vcs"
 
 [tool.hatch.version.raw-options]
 local_scheme = "no-local-version"
-# Editable installs on lote-synced hosts build from a source tree with no .git (the sync
-# strips vcs metadata), so version detection needs a graceful floor there; a real release
-# from the intact repo still derives the true tag. The former vcs urls metadata hook ran
-# `git rev-parse HEAD` unconditionally and hard-failed on those hosts, so it is gone; it
-# only decorated published metadata with a source-archive link.
 fallback_version = "0.0.0"
 
 [project]
-name = "rls"
+name = "rlsalchemy"
 dynamic = ["version"]
 authors = [
   { name = "Pedro Valois", email = "contact@phvv.me" },

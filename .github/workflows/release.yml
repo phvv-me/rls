@@ -22,7 +22,7 @@ jobs:
     - uses: actions/upload-artifact@v7
       with:
         name: wheel
-        path: ./rls*.whl
+        path: ./rlsalchemy*.whl
 
   # The rls package is claimed in test, so we skip this.
   # upload_wheel_test:
@@ -46,13 +46,13 @@ jobs:
   upload_wheel:
     needs: [build_wheel]
     runs-on: ubuntu-latest
-    # the `rls` name on PyPI is already claimed by upstream DelfinaCare/rls; this fork has not
-    # picked a distinct published name yet, so this job is gated on the same owner check as
-    # upstream's own (disabled) test-index job above until that is decided.
+    # this fork publishes under its own name `rlsalchemy` (the `rls` name on PyPI is upstream
+    # DelfinaCare/rls); gated on a release published under this owner, with the pypi trusted
+    # publisher configured for the `rlsalchemy` project.
     if: github.event_name == 'release' && github.event.action == 'published' && github.repository_owner == 'phvv-me'
     environment:
         name: pypi
-        url: https://pypi.org/p/rls
+        url: https://pypi.org/p/rlsalchemy
     permissions:
       id-token: write
     steps:
