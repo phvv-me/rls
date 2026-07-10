@@ -5,6 +5,7 @@ on:
   release:
     types:
       - published
+  workflow_dispatch:
 
 jobs:
   build_wheel:
@@ -49,7 +50,7 @@ jobs:
     # this fork publishes under its own name `rlsalchemy` (the `rls` name on PyPI is upstream
     # DelfinaCare/rls); gated on a release published under this owner, with the pypi trusted
     # publisher configured for the `rlsalchemy` project.
-    if: github.event_name == 'release' && github.event.action == 'published' && github.repository_owner == 'phvv-me'
+    if: github.repository_owner == 'phvv-me' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.action == 'published'))
     environment:
         name: pypi
         url: https://pypi.org/p/rlsalchemy
