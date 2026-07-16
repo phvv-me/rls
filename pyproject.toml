@@ -11,7 +11,7 @@ source = "vcs"
 
 [tool.hatch.version.raw-options]
 local_scheme = "no-local-version"
-fallback_version = "0.0.0"
+fallback_version = "0.4.1"
 
 [project]
 name = "rlsalchemy"
@@ -22,7 +22,7 @@ authors = [
 ]
 description = "Declarative PostgreSQL row level security for SQLAlchemy and Alembic"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 license = "MIT"
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -31,26 +31,30 @@ classifiers = [
 ]
 
 dependencies = [
-  "alembic>=1.13.3",
-  "pydantic>=2.9.1",
-  "sqlalchemy>=2.0.34",
-  "sqlglot>=25",
+  "alembic>=1.18.5,<2",
+  "inflection>=0.5.1,<1",
+  "patos>=0.0.8,<0.1",
+  "pydantic>=2.13.4,<3",
+  "sqlalchemy>=2.1.0b3,<3",
+  "sqlglot>=30,<31",
 ]
-[project.optional-dependencies]
-dev = [
-  "asyncpg>=0.30",
-  "mypy>=1.11.2",
-  "psycopg[binary]>=3.0",
-  "pytest>=8",
-  "pytest-asyncio>=0.24",
-  "ruff>=0.15.0",
-]
+
+[project.entry-points."alembic.plugins"]
+rls = "rls.plugin:plugins"
 
 [project.urls]
 Homepage = "https://github.com/phvv-me/rls"
 Issues = "https://github.com/phvv-me/rls/issues"
 
 [tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["rls"]
+
+[tool.pyrefly]
+project-includes = ["rls", "tests"]
+search-path = [".", "tests", "../patos/src"]
+python-interpreter-path = "../../.chefe/.pixi/envs/default/bin/python"
 
 [tool.ruff]
 line-length = 99
@@ -62,5 +66,8 @@ extend-select = ["I"]
 force-single-line = true
 
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = "-q --cov=rls --cov-branch --cov-report=term-missing"
 testpaths = ["tests"]
+
+[tool.coverage.report]
+fail_under = 100
