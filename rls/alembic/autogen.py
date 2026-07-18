@@ -1,6 +1,9 @@
+from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from alembic.autogenerate.render import renderers
+from alembic.operations.ops import CreateTableOp
+from alembic.operations.ops import OpContainer
 from alembic.util import PriorityDispatchResult
 
 from ..catalog import Catalog
@@ -8,7 +11,33 @@ from .operation import AlterRLSOp
 
 if TYPE_CHECKING:
     from alembic.autogenerate.api import AutogenContext
+    from alembic.migration import MigrationContext
+    from alembic.operations.ops import MigrationScript
     from alembic.operations.ops import UpgradeOps
+def omit_runtime_table_info(
+    context: MigrationContext,
+    revision: Iterable[str | None] | Iterable[str] | str,
+    directives: list[MigrationScript],
+) -> None:
+    """Remove runtime RLS state before Alembic renders new table operations.
+
+    The RLS comparator has already read this state from SQLAlchemy metadata by
+    the time this hook runs. Keeping it on `CreateTableOp` would make Alembic
+    render Pydantic and enum representations that are neither migration state
+    nor valid Python source.
+    """
+    del context, revision
+
+    def clean(container: OpContainer) -> None:
+        for operation in container.ops:
+            if isinstance(operation, CreateTableOp):
+                operation.info.pop("rls", None)
+            if isinstance(operation, OpContainer):
+                clean(operation)
+
+    for directive in directives:
+        for operations in (*directive.upgrade_ops_list, *directive.downgrade_ops_list):
+            clean(operations)
 
 
 def compare_rls(context: AutogenContext, upgrade_ops: UpgradeOps) -> PriorityDispatchResult:
