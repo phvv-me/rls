@@ -3,7 +3,7 @@ from typing import cast
 import pytest
 import sqlalchemy as sa
 from conftest import CatalogConnection
-from conftest import CockroachCatalogConnection
+from conftest import CockroachDialect
 from conftest import RecordingConnection
 from conftest import catalog_rows
 from conftest import make_catalog
@@ -166,19 +166,28 @@ def test_verify_reports_drift_and_passes_when_matched() -> None:
     assert catalog.verify(cast(Connection, CatalogConnection(lowercase))) == []
 
 
-def test_cockroach_reflection_uses_show_policies_and_shared_table_flags() -> None:
-    """CockroachDB reflects its empty compatibility view through structured commands."""
+def test_cockroach_reflection_uses_the_postgresql_catalog_api() -> None:
+    """CockroachDB uses the same SQLAlchemy reflection path as PostgreSQL."""
     metadata = sa.MetaData()
     items = sa.Table("items", metadata, sa.Column("id", sa.Integer()), schema="tenant")
     plain = sa.Table("plain", metadata, sa.Column("id", sa.Integer()))
-    connection = CockroachCatalogConnection(
-        flags=[("tenant", "items", True, True), ("public", "plain", False, False)],
-        policies={
-            "SHOW POLICIES FOR tenant.items": [
-                ("rls_select", "SELECT", "permissive", ["reader"], "id > 0:::INT8", "")
-            ],
-            "SHOW POLICIES FOR public.plain": [],
-        },
+    connection = CatalogConnection(
+        [
+            (
+                "tenant",
+                "items",
+                True,
+                True,
+                "rls_select",
+                "PERMISSIVE",
+                ["reader"],
+                "SELECT",
+                "id > 0:::INT8",
+                None,
+            ),
+            ("public", "plain", False, False, None, None, None, None, None, None),
+        ],
+        dialect=CockroachDialect(),
     )
 
     states = rls.Catalog.reflect(cast(Connection, connection), (items, plain))
@@ -194,7 +203,3 @@ def test_cockroach_reflection_uses_show_policies_and_shared_table_flags() -> Non
         )
     )
     assert states[plain] == rls.RLSState(enabled=False, forced=False)
-    assert connection.statements == [
-        "SHOW POLICIES FOR public.plain",
-        "SHOW POLICIES FOR tenant.items",
-    ]

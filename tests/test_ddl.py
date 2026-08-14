@@ -1,47 +1,44 @@
-import pytest
 import sqlalchemy as sa
 from conftest import CockroachDialect
 from conftest import compile_ddl
 from conftest import rls_states
 from hypothesis import given
+from sqlalchemy.dialects.postgresql import CreatePolicy
+from sqlalchemy.dialects.postgresql import Policy
 
 import rls
-from rls.ddl import RLSAction
-from rls.ddl import RLSStatement
 
 
-def test_identifiers_are_dialect_quoted_and_construction_is_guarded() -> None:
-    """Hostile names are quoted as data, and the two invalid constructions fail fast."""
+def test_fork_policy_ddl_quotes_identifiers() -> None:
+    """RLSAlchemy feeds declarations into SQLAlchemy's safely quoted policy DDL."""
     table = sa.Table("items; DROP TABLE users", sa.MetaData(), schema="private data")
-    policy = rls.CompiledPolicy(
-        name='read"; RESET ROLE; --',
-        command=rls.Command.select,
-        using="true",
-        roles=("account reader",),
-        permissive=False,
+    statement = CreatePolicy(
+        Policy(
+            'read"; RESET ROLE; --',
+            table,
+            command="SELECT",
+            using="true",
+            roles="account reader",
+            permissive=False,
+        )
     )
-    sql = compile_ddl(RLSStatement(table, RLSAction.create, policy=policy))
+    sql = compile_ddl(statement)
     assert '"private data"."items; DROP TABLE users"' in sql
     assert '"read""; RESET ROLE; --"' in sql
     assert 'TO "account reader"' in sql
     assert "AS RESTRICTIVE" in sql
-    with pytest.raises(ValueError, match="create requires"):
-        RLSStatement(table, RLSAction.create)
-    with pytest.raises(ValueError, match="drop requires"):
-        RLSStatement(table, RLSAction.drop)
 
 
-def test_cockroachdb_uses_the_same_quoted_policy_ddl() -> None:
-    """The CockroachDB dialect compiles the portable RLS statement directly."""
+def test_cockroachdb_inherits_the_fork_policy_ddl() -> None:
+    """The CockroachDB dialect inherits SQLAlchemy's PostgreSQL policy compiler."""
     table = sa.Table("order", sa.MetaData(), sa.Column("id", sa.Integer()))
-    statement = RLSStatement(
-        table,
-        RLSAction.create,
-        policy=rls.CompiledPolicy(
-            name="rls_select",
-            command=rls.Command.select,
+    statement = CreatePolicy(
+        Policy(
+            "rls_select",
+            table,
+            command="SELECT",
             using="id > 0",
-        ),
+        )
     )
 
     assert str(statement.compile(dialect=CockroachDialect())).startswith(
@@ -51,7 +48,7 @@ def test_cockroachdb_uses_the_same_quoted_policy_ddl() -> None:
 
 @given(state=rls_states())
 def test_apply_and_drop_are_ordered_inverse_sequences(state: rls.RLSState) -> None:
-    """Apply toggles flags then creates each policy; drop reverses the policies then the flags."""
+    """Apply toggles flags then creates each policy; drop reverses policies then flags."""
     table = sa.Table("items", sa.MetaData())
     applied = [compile_ddl(statement) for statement in rls.apply_statements(table, state)]
     dropped = [compile_ddl(statement) for statement in rls.drop_statements(table, state)]

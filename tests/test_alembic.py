@@ -87,12 +87,12 @@ def test_operation_executes_both_directions_and_renders_self_contained_source() 
     assert forward[-3:] == [
         "ALTER TABLE public.items ENABLE ROW LEVEL SECURITY",
         "ALTER TABLE public.items FORCE ROW LEVEL SECURITY",
-        "CREATE POLICY read ON public.items AS PERMISSIVE FOR SELECT TO public USING (owner_id = 1)",
+        "CREATE POLICY read ON public.items FOR SELECT TO public USING (owner_id = 1)",
     ]
     assert capture(operation.reverse())[-3:] == [
         "ALTER TABLE public.items ENABLE ROW LEVEL SECURITY",
         "ALTER TABLE public.items NO FORCE ROW LEVEL SECURITY",
-        "CREATE POLICY read ON public.items AS PERMISSIVE FOR SELECT TO public USING (owner_id = 1)",
+        "CREATE POLICY read ON public.items FOR SELECT TO public USING (owner_id = 1)",
     ]
     install_only = capture(AlterRLSOp("items", before=None, after=configured()))
     assert len(install_only) == 3 and not any("DROP" in line for line in install_only)

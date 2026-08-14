@@ -118,8 +118,8 @@ context.configure(
 )
 ```
 
-Autogenerate reads PostgreSQL policies in one joined catalog query. On CockroachDB it reads the
-shared table flags once and uses the database's structured policy command for each table. Drift produces one
+Autogenerate reads PostgreSQL and CockroachDB policies through SQLAlchemy's bulk row security
+reflection API. Drift produces one
 typed `AlterRLSOp` carrying complete before and after `rls.RLSState` values, so
 downgrade is the same operation with the states reversed. The snapshot includes enable and
 force flags as well as policies, so a partially configured live table also reverses exactly.
@@ -143,9 +143,10 @@ through SQLGlot's leaves-first tree replacement. `CompiledPolicy` then uses froz
 equality over the canonical result. Managed tables with undeclared live row security are
 reported too.
 
-PostgreSQL reflection reads `pg_catalog.pg_policies` in one query. CockroachDB reflection uses
-its structured `SHOW POLICIES` command because its PostgreSQL compatibility view is empty. The
-declaration, migration, session context, and verification APIs stay the same on both databases.
+Reflection calls SQLAlchemy's `get_multi_row_security` once per requested schema on PostgreSQL and
+CockroachDB. Policy creation, removal, and table flags use the same typed PostgreSQL DDL objects on
+both dialects. The declaration, migration, session context, and verification APIs stay the same on
+both databases.
 
 CockroachDB does not allow SQL subqueries inside policy predicates. Express those relationships
 through a database function or a direct predicate. Its documented `ON CONFLICT DO NOTHING`

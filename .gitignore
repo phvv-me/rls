@@ -13,3 +13,4 @@ _version.py
 .ruff_cache/
 .coverage
 htmlcov/
+.chefe/

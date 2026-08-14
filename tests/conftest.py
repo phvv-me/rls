@@ -19,10 +19,11 @@ from sqlalchemy.orm import mapped_column
 from sqlalchemy.sql.elements import ColumnElement
 
 import rls
+from rls import Command
+from rls import CompiledPolicy
+from rls import RLSState
 from rls.alembic import AlterRLSOp
-from rls.policy import Command
-from rls.policy import CompiledPolicy
-from rls.state import RLSState
+from rls.policy import Rule
 
 type CatalogRow = tuple[
     str,
@@ -36,7 +37,15 @@ type CatalogRow = tuple[
     str | None,
     str | None,
 ]
-type CockroachPolicyRow = tuple[str, str, str, list[str], str, str]
+type ReflectedValue = bool | str | list[str] | None
+
+
+class CatalogResult(list[dict[str, ReflectedValue]]):
+    """Result rows shaped like SQLAlchemy's PostgreSQL mappings result."""
+
+    def mappings(self) -> "CatalogResult":
+        """Expose mapping rows through the result API used by the dialect."""
+        return self
 
 
 class CockroachDialect(postgresql.dialect):
@@ -64,27 +73,37 @@ class CatalogConnection:
     rows: list[CatalogRow]
     dialect: Dialect = field(default_factory=postgresql.dialect)
 
-    def execute(self, statement: sa.Executable) -> list[CatalogRow]:
-        del statement
-        return self.rows
-
-
-@dataclass
-class CockroachCatalogConnection:
-    """Fake CockroachDB connection exposing flags and structured policy commands."""
-
-    flags: list[tuple[str, str, bool, bool]]
-    policies: dict[str, list[CockroachPolicyRow]]
-    dialect: Dialect = field(default_factory=CockroachDialect)
-    statements: list[str] = field(default_factory=list)
-
-    def exec_driver_sql(self, statement: str) -> list[CockroachPolicyRow]:
-        self.statements.append(statement)
-        return self.policies[statement]
-
-    def execute(self, statement: sa.Executable) -> list[tuple[str, str, bool, bool]]:
-        del statement
-        return self.flags
+    def execute(
+        self,
+        statement: sa.Executable,
+        parameters: dict[str, list[str]] | None = None,
+    ) -> CatalogResult:
+        del statement, parameters
+        return CatalogResult(
+            {
+                "table_name": table,
+                "enabled": enabled,
+                "forced": forced,
+                "name": name,
+                "command": command,
+                "roles": roles,
+                "using": using,
+                "check": check,
+                "permissive": permissive,
+            }
+            for (
+                _schema,
+                table,
+                forced,
+                enabled,
+                name,
+                permissive,
+                roles,
+                command,
+                using,
+                check,
+            ) in self.rows
+        )
 
 
 @dataclass
@@ -206,16 +225,31 @@ _ROLE_TUPLES = st.lists(
 _NAMES = st.sampled_from(("read", "insert", "update", "delete", "alpha", "beta"))
 
 
-def compiled_policies() -> st.SearchStrategy[CompiledPolicy]:
+@st.composite
+def compiled_policies(draw: st.DrawFn) -> CompiledPolicy:
     """Compiled policies over the full attribute space, with parseable clauses."""
-    return st.builds(
-        CompiledPolicy,
-        name=_NAMES,
-        command=st.sampled_from(Command),
-        using=_CLAUSES,
-        check=_CLAUSES,
-        roles=_ROLE_TUPLES,
-        permissive=st.booleans(),
+    command = draw(st.sampled_from(Command))
+    using = draw(
+        st.none()
+        if command.using is Rule.forbidden
+        else _CLAUSES.filter(lambda clause: clause is not None)
+        if command.using is Rule.required
+        else _CLAUSES
+    )
+    check = draw(
+        st.none()
+        if command.checking is Rule.forbidden
+        else _CLAUSES.filter(lambda clause: clause is not None)
+        if command.checking is Rule.required
+        else _CLAUSES
+    )
+    return CompiledPolicy(
+        name=draw(_NAMES),
+        command=command,
+        using=using,
+        check=check,
+        roles=draw(_ROLE_TUPLES),
+        permissive=draw(st.booleans()),
     )
 
 
