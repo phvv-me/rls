@@ -30,9 +30,10 @@ class RLSStatement(ExecutableDDLElement):
         self.name = name
 
 
+@compiles(RLSStatement, "cockroachdb")
 @compiles(RLSStatement, "postgresql")
 def compile_statement(element: RLSStatement, compiler: DDLCompiler, **kwargs: bool) -> str:
-    """Compile row security DDL with dialect-quoted identifiers."""
+    """Compile PostgreSQL-compatible row security DDL with quoted identifiers."""
     del kwargs
     quote = compiler.preparer.quote
     table = compiler.preparer.format_table(element.table)

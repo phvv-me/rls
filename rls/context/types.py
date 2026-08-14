@@ -32,14 +32,19 @@ def sql_type(annotation: ContextAnnotation) -> TypeEngine[ContextScalar]:
         if len(candidates) != 1:
             raise TypeError(f"context fields accept one optional type, got {annotation!r}")
         return sql_type(candidates[0])
-    if typing.get_origin(annotation) is tuple:
+    origin = typing.get_origin(annotation)
+    if origin is typing.Annotated:
+        return sql_type(typing.get_args(annotation)[0])
+    if origin in {frozenset, list, set, tuple}:
         item, *rest = typing.get_args(annotation)
-        if rest != [Ellipsis]:
+        if origin is tuple and rest != [Ellipsis]:
             raise TypeError("context tuples must be homogeneous, like tuple[UUID, ...]")
+        if origin is not tuple and rest:
+            raise TypeError("context collections take one item type")
         return cast(TypeEngine[ContextScalar], ARRAY[ContextScalar](sql_type(item)))
     if (
         typing.is_typeddict(annotation)
-        or typing.get_origin(annotation) is dict
+        or origin is dict
         or isinstance(annotation, type)
         and issubclass(annotation, BaseModel)
     ):

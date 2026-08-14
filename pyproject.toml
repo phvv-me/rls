@@ -11,7 +11,7 @@ source = "vcs"
 
 [tool.hatch.version.raw-options]
 local_scheme = "no-local-version"
-fallback_version = "0.4.1"
+fallback_version = "0.6.0"
 
 [project]
 name = "rlsalchemy"
@@ -20,7 +20,7 @@ authors = [
   { name = "Pedro Valois", email = "contact@phvv.me" },
   { name = "DelfinaCare", email = "open-source@delfina.com" },
 ]
-description = "Declarative PostgreSQL row level security for SQLAlchemy and Alembic"
+description = "Declarative PostgreSQL and CockroachDB row security for SQLAlchemy and Alembic"
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
@@ -37,6 +37,16 @@ dependencies = [
   "pydantic>=2.13.4,<3",
   "sqlalchemy>=2.1.0b3,<3",
   "sqlglot>=30,<31",
+]
+
+[project.optional-dependencies]
+dev = [
+  "hypothesis>=6.155,<7",
+  "mypy>=2.3,<3",
+  "pyrefly>=1.1.1,<2",
+  "pytest>=9.1,<10",
+  "pytest-cov>=7.1,<8",
+  "ruff>=0.15,<0.16",
 ]
 
 [project.entry-points."alembic.plugins"]

@@ -40,7 +40,7 @@ def test_command_keyword_and_slot_rules_gate_policy_validity(
     check = predicate() if give_check else None
     valid = _allowed(command.using, give_using) and _allowed(command.checking, give_check)
     if valid:
-        assert rls.Policy(name="p", command=command, using=using, check=check).command is command
+        assert rls.Policy(command=command, using=using, check=check).command is command
     else:
         with pytest.raises(pydantic.ValidationError):
             rls.Policy(name="p", command=command, using=using, check=check)
@@ -49,11 +49,11 @@ def test_command_keyword_and_slot_rules_gate_policy_validity(
 def test_constructors_crud_and_compile_produce_the_expected_shapes() -> None:
     """The constructors, `crud`, and `compile` yield the right commands, literals, and guards."""
     built = (
-        rls.Policy.select("read", predicate()),
-        rls.Policy.insert("ins", predicate()),
-        rls.Policy.update("upd", predicate(), predicate()),
-        rls.Policy.delete("del", predicate()),
-        rls.Policy.for_all("all", predicate(), predicate()),
+        rls.Policy.select(predicate(), name="read"),
+        rls.Policy.insert(predicate(), name="ins"),
+        rls.Policy.update(predicate(), check=predicate(), name="upd"),
+        rls.Policy.delete(predicate(), name="del"),
+        rls.Policy.for_all(predicate(), predicate(), name="all"),
     )
     assert [policy.command for policy in built] == [
         Command.select,
@@ -62,12 +62,12 @@ def test_constructors_crud_and_compile_produce_the_expected_shapes() -> None:
         Command.delete,
         Command.all,
     ]
-    policies = rls.crud(predicate(), predicate())
-    assert [policy.name for policy in policies] == [
-        "scope_read",
-        "scope_insert",
-        "scope_update",
-        "scope_delete",
+    policies = rls.crud(predicate(), write=predicate())
+    assert [policy.resolved_name for policy in policies] == [
+        "rls_select",
+        "rls_insert",
+        "rls_update",
+        "rls_delete",
     ]
     assert [policy.command for policy in policies] == [
         Command.select,
@@ -78,6 +78,6 @@ def test_constructors_crud_and_compile_produce_the_expected_shapes() -> None:
     compiled = built[0].compile()
     assert compiled.using == "owner_id = 1" and compiled.check is None
     with pytest.raises(pydantic.ValidationError, match="name"):
-        rls.Policy.select("", predicate())
+        rls.Policy.select(predicate(), name="")
     with pytest.raises(pydantic.ValidationError, match="roles"):
-        rls.Policy.select("read", predicate(), roles=())
+        rls.Policy.select(predicate(), roles=())

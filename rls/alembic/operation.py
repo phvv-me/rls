@@ -13,6 +13,7 @@ class AlterRLSOp(MigrateOperation):
     def __init__(
         self,
         table_name: str,
+        *,
         before: RLSState | None,
         after: RLSState | None,
         schema_name: str | None = None,
@@ -27,16 +28,22 @@ class AlterRLSOp(MigrateOperation):
         cls,
         operations: Operations,
         table_name: str,
+        *,
         before: RLSState | None,
         after: RLSState | None,
         schema_name: str | None = None,
     ) -> None:
         """Invoke the registered operation from a migration."""
-        operations.invoke(cls(table_name, before, after, schema_name))
+        operations.invoke(cls(table_name, before=before, after=after, schema_name=schema_name))
 
     def reverse(self) -> "AlterRLSOp":
         """Swap the complete before and after states."""
-        return AlterRLSOp(self.table_name, self.after, self.before, self.schema_name)
+        return AlterRLSOp(
+            self.table_name,
+            before=self.after,
+            after=self.before,
+            schema_name=self.schema_name,
+        )
 
     def to_diff_tuple(
         self,

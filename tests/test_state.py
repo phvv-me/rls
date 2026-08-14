@@ -5,6 +5,7 @@ from hypothesis import strategies as st
 
 import rls
 from rls.policy import Command
+from rls.policy import CompiledPolicy
 
 
 @given(state=rls_states())
@@ -85,6 +86,74 @@ def test_normalization_folds_deparser_noise_but_keeps_semantic_casts() -> None:
         )
     )
     assert declared.diff(live, "items") == ()
+    function = policy.model_copy(update={"using": "visible(owner_id)"})
+    assert function.matches(
+        policy.model_copy(update={"using": "public.visible(owner_id)"}), "items"
+    )
+    integer_literals = policy.model_copy(
+        update={"using": "cardinality(scopes) > 0 AND split_part(path, '/', 2) <> ''"}
+    )
+    assert integer_literals.matches(
+        policy.model_copy(
+            update={
+                "using": "cardinality(scopes) > 0:::INT8 "
+                "AND split_part(path, '/':::STRING, 2:::INT8) <> '':::STRING"
+            }
+        ),
+        "items",
+    )
+
+
+def test_normalization_accepts_cockroach_casts_without_rewriting_literals() -> None:
+    """Cockroach casts become PostgreSQL casts while quoted triple colons stay data."""
+    declared = rls.CompiledPolicy(
+        name="read",
+        command=Command.select,
+        using="cardinality(scopes) > CAST(0 AS INT8) "
+        "AND current_setting('app:::uid'::STRING, true) <> ''",
+    )
+    reflected = declared.model_copy(
+        update={
+            "using": "((cardinality(scopes) > 0:::INT8) AND "
+            "(current_setting('app:::uid':::STRING, true) <> '':::STRING))"
+        }
+    )
+    assert declared.matches(reflected, "items")
+
+
+def test_cockroach_cast_translation_preserves_every_quoted_form() -> None:
+    """Single, identifier, and dollar quotes keep triple colons as literal content."""
+    clause = "'a'':::b':::STRING || \"a\"\":::b\":::STRING || $$c:::d$$:::STRING"
+    normalized = CompiledPolicy(name="read", command=Command.select, using=clause).normalized(
+        "items"
+    )
+
+    assert normalized.using is not None
+    assert "'a'':::b'" in normalized.using
+    assert '"a"":::b"' in normalized.using
+    assert "c:::d" in normalized.using
+
+
+def test_normalization_rewrites_nested_json_casts_and_subqueries() -> None:
+    """Nested deparser forms collapse to the expression they mean."""
+    nested_json = CompiledPolicy(
+        name="read",
+        command=Command.select,
+        using="CAST(CAST(payload ->> 'uid' AS TEXT) AS UUID)",
+    )
+    assert nested_json.normalized("items").using == "CAST(payload ->> 'uid' AS UUID)"
+
+    semantic_cast = CompiledPolicy(
+        name="read",
+        command=Command.select,
+        using="CAST(CAST(owner_id AS INTEGER) AS TEXT)",
+    )
+    collapsed = semantic_cast.model_copy(update={"using": "CAST(owner_id AS TEXT)"})
+    assert not semantic_cast.matches(collapsed, "items")
+
+    nested_query = CompiledPolicy(name="read", command=Command.select, using="((SELECT owner_id))")
+    direct_query = nested_query.model_copy(update={"using": "(SELECT owner_id)"})
+    assert nested_query.matches(direct_query, "items")
 
 
 def test_exists_and_declared_capture_presence() -> None:
@@ -93,6 +162,6 @@ def test_exists_and_declared_capture_presence() -> None:
     assert rls.RLSState(enabled=True, forced=False).exists
     policy = rls.CompiledPolicy(name="read", command=Command.select, using="owner_id = 1")
     assert rls.RLSState(enabled=False, forced=False, policies=(policy,)).exists
-    declared = rls.RLSState.declared((rls.Policy.select("read", predicate()),))
+    declared = rls.RLSState.declared((rls.Policy.select(predicate(), name="read"),))
     assert declared.enabled and declared.forced
     assert declared.policies[0].using == "owner_id = 1"

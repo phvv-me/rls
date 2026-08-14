@@ -1,10 +1,10 @@
 # rlsalchemy
 
-Declarative PostgreSQL row level security for SQLAlchemy 2.1 and Alembic 1.18.
+Declarative PostgreSQL and CockroachDB row level security for SQLAlchemy 2.1 and Alembic 1.18.
 
 Models own policy expressions. A typed context model derives every setting name, SQL cast,
 and prefix from one class. SQLAlchemy table metadata carries the compiled declaration.
-Alembic compares that declaration with PostgreSQL and writes one reversible operation for
+Alembic compares that declaration with the active database and writes one reversible operation for
 the complete table state. Sessions bind request context through the standard `Session.info`
 mapping and `SessionEvents.after_begin`.
 
@@ -57,10 +57,9 @@ class Item(Base):
 
     @classmethod
     def __rls__(cls) -> tuple[rls.Policy, ...]:
-        row = sa.func.to_jsonb(cls.scopes)
-        readable = row.op("<@")(User.scopes["read"])
-        writable = row.op("<@")(User.scopes["write"])
-        return rls.crud(readable, writable, name="scope")
+        readable = cls.scopes.op("<@")(User.setting("scopes.read"))
+        writable = cls.scopes.op("<@")(User.setting("scopes.write"))
+        return rls.crud(readable, write=writable)
 
 
 catalog = rls.Catalog(Base.registry)
@@ -69,10 +68,13 @@ catalog = rls.Catalog(Base.registry)
 `Catalog` is a closed set of mapped tables and policy declarations. It is deliberately not
 the self-registering implementation pattern provided by `patos.Registry`.
 
-`rls.crud` produces separate select, insert, update, and delete policies. Individual policy
+`rls.crud` produces separate select, insert, update, and delete policies. Their table-local
+names derive from those commands, so ordinary declarations contain no identifier strings.
+Individual policy
 constructors (`Policy.select`, `Policy.insert`, `Policy.update`, `Policy.delete`,
 `Policy.for_all`) cover tables that need a different shape, multiple roles, or restrictive
-composition.
+composition. Pass `name=` only when a table deliberately declares more than one policy for
+the same command.
 
 ## Sessions
 
@@ -97,8 +99,12 @@ async with sessions(info=user.info()) as session:
 ```
 
 The package writes every value with SQLAlchemy `set_config` expressions and transaction-local
-scope, serialized once per context instance. A pooled connection cannot retain context after
-commit or rollback. Scalars, dates, UUIDs, tuples, and `None` are supported.
+scope, serialized once per context instance. Nested context models flatten into dotted settings,
+which keeps arrays native and avoids JSON subqueries inside policies. A pooled connection cannot
+retain context after commit or rollback. Scalars, dates, UUIDs, collections, JSON values, and
+`None` are supported.
+Applications that do not use Pydantic can pass pre-serialized pairs through
+`rls.SessionContext(...).info()` and use the same transaction hook.
 
 ## Alembic
 
@@ -112,7 +118,8 @@ context.configure(
 )
 ```
 
-Autogenerate reads all managed tables in one joined catalog query. Drift produces one
+Autogenerate reads PostgreSQL policies in one joined catalog query. On CockroachDB it reads the
+shared table flags once and uses the database's structured policy command for each table. Drift produces one
 typed `AlterRLSOp` carrying complete before and after `rls.RLSState` values, so
 downgrade is the same operation with the states reversed. The snapshot includes enable and
 force flags as well as policies, so a partially configured live table also reverses exactly.
@@ -135,6 +142,15 @@ uses a PostgreSQL AST and preserves casts that can change behavior, folding depa
 through SQLGlot's leaves-first tree replacement. `CompiledPolicy` then uses frozen value
 equality over the canonical result. Managed tables with undeclared live row security are
 reported too.
+
+PostgreSQL reflection reads `pg_catalog.pg_policies` in one query. CockroachDB reflection uses
+its structured `SHOW POLICIES` command because its PostgreSQL compatibility view is empty. The
+declaration, migration, session context, and verification APIs stay the same on both databases.
+
+CockroachDB does not allow SQL subqueries inside policy predicates. Express those relationships
+through a database function or a direct predicate. Its documented `ON CONFLICT DO NOTHING`
+behavior can also skip row policy checks for candidate rows, so security-sensitive inserts should
+not rely on that form.
 
 Applications without Alembic can call `catalog.create_all(connection)` inside their own
 transaction. Every emitted schema statement is a typed SQLAlchemy `ExecutableDDLElement`

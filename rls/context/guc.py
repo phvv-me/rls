@@ -4,21 +4,26 @@ import sqlalchemy as sa
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.type_api import TypeEngine
 
+from ..exceptions import ContextError
+
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def valid_setting_name(name: str) -> bool:
+def is_valid_setting_name(name: str) -> bool:
     """Whether a name is safe as a PostgreSQL custom setting identifier."""
     return _NAME.fullmatch(name) is not None
 
 
-def current_setting[T](name: str, type_: TypeEngine[T], prefix: str) -> ColumnElement[T]:
-    """Read and cast one transaction-local PostgreSQL setting.
+def is_valid_qualified_setting_name(name: str) -> bool:
+    """Whether a dotted custom setting name has safe identifier components."""
+    parts = name.split(".")
+    return len(parts) >= 2 and all(is_valid_setting_name(part) for part in parts)
 
-    The scalar-subquery wrapper is deliberate. PostgreSQL hoists it into an InitPlan
-    evaluated once per statement, so a policy pays one setting read instead of one per row.
-    """
-    if not valid_setting_name(name) or not valid_setting_name(prefix):
-        raise ValueError("PostgreSQL setting names must be identifiers")
-    read = sa.func.nullif(sa.func.current_setting(f"{prefix}.{name}", True), "")
-    return sa.select(read.cast(type_).label(name)).scalar_subquery()
+
+def current_setting[T](name: str, type_: TypeEngine[T], prefix: str) -> ColumnElement[T]:
+    """Read and cast one portable transaction-local PostgreSQL setting."""
+    qualified = f"{prefix}.{name}"
+    if not is_valid_qualified_setting_name(qualified):
+        raise ContextError("PostgreSQL setting names must be identifiers")
+    read = sa.func.nullif(sa.func.current_setting(qualified, True), "")
+    return read.cast(type_)

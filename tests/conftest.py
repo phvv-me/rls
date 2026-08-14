@@ -36,6 +36,13 @@ type CatalogRow = tuple[
     str | None,
     str | None,
 ]
+type CockroachPolicyRow = tuple[str, str, str, list[str], str, str]
+
+
+class CockroachDialect(postgresql.dialect):
+    """PostgreSQL compiler surface carrying CockroachDB's dialect name."""
+
+    name = "cockroachdb"
 
 
 class Standing(rls.Context, prefix="app"):
@@ -60,6 +67,24 @@ class CatalogConnection:
     def execute(self, statement: sa.Executable) -> list[CatalogRow]:
         del statement
         return self.rows
+
+
+@dataclass
+class CockroachCatalogConnection:
+    """Fake CockroachDB connection exposing flags and structured policy commands."""
+
+    flags: list[tuple[str, str, bool, bool]]
+    policies: dict[str, list[CockroachPolicyRow]]
+    dialect: Dialect = field(default_factory=CockroachDialect)
+    statements: list[str] = field(default_factory=list)
+
+    def exec_driver_sql(self, statement: str) -> list[CockroachPolicyRow]:
+        self.statements.append(statement)
+        return self.policies[statement]
+
+    def execute(self, statement: sa.Executable) -> list[tuple[str, str, bool, bool]]:
+        del statement
+        return self.flags
 
 
 @dataclass
@@ -139,7 +164,7 @@ def make_catalog() -> tuple[type[DeclarativeBase], rls.Catalog]:
 
         @classmethod
         def __rls__(cls) -> tuple[rls.Policy, ...]:
-            return rls.crud(cls.owner_id == 1, cls.owner_id == 1)
+            return rls.crud(cls.owner_id == 1, write=cls.owner_id == 1)
 
     class Plain(Base):
         __tablename__ = "plain"

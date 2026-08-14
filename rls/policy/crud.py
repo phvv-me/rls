@@ -4,14 +4,14 @@ from .predicate import Predicate
 
 def crud(
     read: Predicate,
+    *,
     write: Predicate,
-    name: str = "scope",
     roles: tuple[str, ...] = ("public",),
 ) -> tuple[Policy, ...]:
-    """Build stable read, insert, update, and delete policies."""
+    """Build one command-named read, insert, update, and delete policy."""
     return (
-        Policy.select(f"{name}_read", read, roles=roles),
-        Policy.insert(f"{name}_insert", write, roles=roles),
-        Policy.update(f"{name}_update", write, write, roles=roles),
-        Policy.delete(f"{name}_delete", write, roles=roles),
+        Policy.select(read, roles=roles),
+        Policy.insert(write, roles=roles),
+        Policy.update(write, check=write, roles=roles),
+        Policy.delete(write, roles=roles),
     )

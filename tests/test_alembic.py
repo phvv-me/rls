@@ -102,7 +102,7 @@ def test_operation_executes_both_directions_and_renders_self_contained_source() 
     migration = MigrationContext.configure(
         dialect_name="postgresql", opts={"as_sql": True, "output_buffer": buffer}
     )
-    AlterRLSOp.alter_rls(Operations(migration), "items", None, configured())
+    AlterRLSOp.alter_rls(Operations(migration), "items", before=None, after=configured())
     assert "CREATE POLICY read ON public.items" in buffer.getvalue()
 
 

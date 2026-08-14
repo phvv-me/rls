@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from alembic.migration import MigrationContext
     from alembic.operations.ops import MigrationScript
     from alembic.operations.ops import UpgradeOps
+
+
 def omit_runtime_table_info(
     context: MigrationContext,
     revision: Iterable[str | None] | Iterable[str] | str,

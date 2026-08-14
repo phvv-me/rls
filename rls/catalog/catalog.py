@@ -9,6 +9,7 @@ from sqlalchemy.orm import registry as MapperRegistry
 from sqlalchemy.sql.selectable import FromClause
 
 from ..ddl import apply_statements
+from ..exceptions import DeclarationError
 from ..policy import Policy
 from ..state import RLSState
 from .open import Open
@@ -41,6 +42,13 @@ class Catalog:
         self.protected = tuple(table for table in self.tables if self.state(table) is not None)
 
     @staticmethod
+    def reflect(connection: Connection, tables: Iterable[Table]) -> dict[Table, RLSState]:
+        """Reflect live row security keyed by the requested tables."""
+        requested = tuple(tables)
+        states = reflect_rls(connection, requested)
+        return {table: states[TableKey.of(table, connection)] for table in requested}
+
+    @staticmethod
     def state(table: Table) -> RLSState | None:
         """Return a table's compiled row security declaration."""
         state = table.info.get(_INFO_KEY)
@@ -57,6 +65,14 @@ class Catalog:
                 tables.extend(attached.tables)
         return tuple(dict.fromkeys(tables))
 
+    def create_all(self, connection: Connection) -> None:
+        """Install every declared policy through typed SQLAlchemy DDL."""
+        for table in self.protected:
+            state = self.state(table)
+            assert state is not None
+            for statement in apply_statements(table, state):
+                connection.execute(statement)
+
     def declare(self, mapped: type, local_table: FromClause) -> None:
         """Compile one mapped class's declaration onto its table."""
         found = cast(PolicyDeclaration | Open | None, getattr(mapped, "__rls__", None))
@@ -66,32 +82,17 @@ class Catalog:
         if isinstance(found, Open):
             return
         if found is None:
-            raise ValueError(
+            raise DeclarationError(
                 f"{table.fullname} declares no RLS policies; declare `__rls__` "
                 "or mark it `rls.Open()`"
             )
         policies = tuple(found() if callable(found) else found)
         if not policies:
-            raise ValueError(f"{table.fullname} declares no RLS policies")
-        names = [policy.name for policy in policies]
+            raise DeclarationError(f"{table.fullname} declares no RLS policies")
+        names = [policy.resolved_name for policy in policies]
         if len(set(names)) != len(names):
-            raise ValueError(f"{table.fullname} declares duplicate policy names")
+            raise DeclarationError(f"{table.fullname} declares duplicate policy names {names!r}")
         table.info[_INFO_KEY] = RLSState.declared(policies)
-
-    def create_all(self, connection: Connection) -> None:
-        """Install every declared policy through typed SQLAlchemy DDL."""
-        for table in self.protected:
-            state = self.state(table)
-            assert state is not None
-            for statement in apply_statements(table, state):
-                connection.execute(statement)
-
-    @staticmethod
-    def reflect(connection: Connection, tables: Iterable[Table]) -> dict[Table, RLSState]:
-        """Reflect live row security keyed by the requested tables."""
-        requested = tuple(tables)
-        states = reflect_rls(connection, requested)
-        return {table: states[TableKey.of(table, connection)] for table in requested}
 
     def inspect(self, connection: Connection) -> dict[Table, RLSState]:
         """Reflect live row security for every managed table."""

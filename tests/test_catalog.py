@@ -3,6 +3,7 @@ from typing import cast
 import pytest
 import sqlalchemy as sa
 from conftest import CatalogConnection
+from conftest import CockroachCatalogConnection
 from conftest import RecordingConnection
 from conftest import catalog_rows
 from conftest import make_catalog
@@ -23,10 +24,10 @@ def test_declarations_compile_onto_tables_and_install_typed_ddl() -> None:
     state = rls.Catalog.state(items)
     assert state is not None and state.enabled and state.forced
     assert [policy.name for policy in state.policies] == [
-        "scope_read",
-        "scope_insert",
-        "scope_update",
-        "scope_delete",
+        "rls_select",
+        "rls_insert",
+        "rls_update",
+        "rls_delete",
     ]
     assert rls.Catalog.state(plain) is None
     assert catalog.protected == (items,)
@@ -56,7 +57,7 @@ def test_open_singleton_and_invalid_declarations() -> None:
         __tablename__ = "silent"
         id: Mapped[int] = mapped_column(primary_key=True)
 
-    with pytest.raises(ValueError, match="silent"):
+    with pytest.raises(rls.DeclarationError, match="silent"):
         rls.Catalog(StrictBase.registry)
 
     class OpenBase(DeclarativeBase):
@@ -65,7 +66,7 @@ def test_open_singleton_and_invalid_declarations() -> None:
     class Declared(OpenBase):
         __tablename__ = "declared"
         id: Mapped[int] = mapped_column(primary_key=True)
-        __rls__ = (rls.Policy.select("read", sa.true()),)
+        __rls__ = (rls.Policy.select(sa.true()),)
 
     class Excused(OpenBase):
         __tablename__ = "excused"
@@ -85,7 +86,7 @@ def test_open_singleton_and_invalid_declarations() -> None:
         id: Mapped[int] = mapped_column(primary_key=True)
         __rls__ = ()
 
-    with pytest.raises(ValueError, match="declares no RLS policies"):
+    with pytest.raises(rls.DeclarationError, match="declares no RLS policies"):
         rls.Catalog(EmptyBase.registry)
 
     class DuplicateBase(DeclarativeBase):
@@ -95,15 +96,15 @@ def test_open_singleton_and_invalid_declarations() -> None:
         __tablename__ = "duplicate"
         id: Mapped[int] = mapped_column(primary_key=True)
         __rls__ = (
-            rls.Policy.select("same", sa.true()),
-            rls.Policy.select("same", sa.true()),
+            rls.Policy.select(sa.true()),
+            rls.Policy.select(sa.true()),
         )
 
-    with pytest.raises(ValueError, match="duplicate policy"):
+    with pytest.raises(rls.DeclarationError, match="duplicate policy"):
         rls.Catalog(DuplicateBase.registry)
 
     class Detached:
-        __rls__ = (rls.Policy.select("read", sa.true()),)
+        __rls__ = (rls.Policy.select(sa.true()),)
 
     with pytest.raises(TypeError, match="mapped table"):
         rls.Catalog().declare(Detached, sa.select(sa.literal(1)).subquery())
@@ -119,7 +120,7 @@ def test_verify_reports_drift_and_passes_when_matched() -> None:
                 "items",
                 True,
                 True,
-                "scope_read",
+                "rls_select",
                 "PERMISSIVE",
                 ["public"],
                 "SELECT",
@@ -142,8 +143,8 @@ def test_verify_reports_drift_and_passes_when_matched() -> None:
         ]
     )
     violations = catalog.verify(cast(Connection, drift))
-    assert "items policy scope_read has drifted" in violations
-    assert "items is missing policy scope_insert" in violations
+    assert "items policy rls_select has drifted" in violations
+    assert "items is missing policy rls_insert" in violations
     assert "items has undeclared policy extra" in violations
     assert "plain has undeclared row level security" in violations
 
@@ -158,3 +159,42 @@ def test_verify_reports_drift_and_passes_when_matched() -> None:
     matched = cast(Connection, CatalogConnection(rows))
     assert catalog.verify(matched) == []
     assert state.matches(catalog.inspect(matched)[items], "items")
+
+    lowercase = rows.copy()
+    first = lowercase[0]
+    lowercase[0] = (*first[:5], "permissive", *first[6:])
+    assert catalog.verify(cast(Connection, CatalogConnection(lowercase))) == []
+
+
+def test_cockroach_reflection_uses_show_policies_and_shared_table_flags() -> None:
+    """CockroachDB reflects its empty compatibility view through structured commands."""
+    metadata = sa.MetaData()
+    items = sa.Table("items", metadata, sa.Column("id", sa.Integer()), schema="tenant")
+    plain = sa.Table("plain", metadata, sa.Column("id", sa.Integer()))
+    connection = CockroachCatalogConnection(
+        flags=[("tenant", "items", True, True), ("public", "plain", False, False)],
+        policies={
+            "SHOW POLICIES FOR tenant.items": [
+                ("rls_select", "SELECT", "permissive", ["reader"], "id > 0:::INT8", "")
+            ],
+            "SHOW POLICIES FOR public.plain": [],
+        },
+    )
+
+    states = rls.Catalog.reflect(cast(Connection, connection), (items, plain))
+
+    assert states[items] == rls.RLSState(
+        policies=(
+            rls.CompiledPolicy(
+                name="rls_select",
+                command=rls.Command.select,
+                using="id > 0:::INT8",
+                roles=("reader",),
+            ),
+        )
+    )
+    assert states[plain] == rls.RLSState(enabled=False, forced=False)
+    assert connection.statements == [
+        "SHOW POLICIES FOR public.plain",
+        "SHOW POLICIES FOR tenant.items",
+    ]

@@ -1,5 +1,6 @@
 import pytest
 import sqlalchemy as sa
+from conftest import CockroachDialect
 from conftest import compile_ddl
 from conftest import rls_states
 from hypothesis import given
@@ -28,6 +29,24 @@ def test_identifiers_are_dialect_quoted_and_construction_is_guarded() -> None:
         RLSStatement(table, RLSAction.create)
     with pytest.raises(ValueError, match="drop requires"):
         RLSStatement(table, RLSAction.drop)
+
+
+def test_cockroachdb_uses_the_same_quoted_policy_ddl() -> None:
+    """The CockroachDB dialect compiles the portable RLS statement directly."""
+    table = sa.Table("order", sa.MetaData(), sa.Column("id", sa.Integer()))
+    statement = RLSStatement(
+        table,
+        RLSAction.create,
+        policy=rls.CompiledPolicy(
+            name="rls_select",
+            command=rls.Command.select,
+            using="id > 0",
+        ),
+    )
+
+    assert str(statement.compile(dialect=CockroachDialect())).startswith(
+        'CREATE POLICY rls_select ON "order"'
+    )
 
 
 @given(state=rls_states())

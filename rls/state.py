@@ -13,15 +13,15 @@ class RLSState(FrozenModel):
     forced: bool = True
     policies: tuple[CompiledPolicy, ...] = ()
 
-    @classmethod
-    def declared(cls, policies: tuple[Policy, ...]) -> Self:
-        """Compile policies into an enabled and forced table state."""
-        return cls(policies=tuple(policy.compile() for policy in policies))
-
     @property
     def exists(self) -> bool:
         """Whether the table has any row security state."""
         return self.enabled or self.forced or bool(self.policies)
+
+    @classmethod
+    def declared(cls, policies: tuple[Policy, ...]) -> Self:
+        """Compile policies into an enabled and forced table state."""
+        return cls(policies=tuple(policy.compile() for policy in policies))
 
     def diff(self, live: Self, table: str) -> tuple[str, ...]:
         """Report every way `live` differs from this declared state."""

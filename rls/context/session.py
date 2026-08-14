@@ -1,17 +1,39 @@
+from dataclasses import dataclass
+
 import sqlalchemy as sa
 from sqlalchemy import event
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import SessionTransaction
 
-from .context import INFO_KEY
-from .context import Context
+from ..exceptions import ContextError
+from .guc import is_valid_qualified_setting_name
+
+_INFO_KEY = "rls.context"
 
 
-def configured_context(session: Session) -> Context | None:
+@dataclass(frozen=True, slots=True)
+class SessionContext:
+    """Serialized transaction settings independent of any application model library."""
+
+    settings: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        names = [name for name, _ in self.settings]
+        if invalid := [name for name in names if not is_valid_qualified_setting_name(name)]:
+            raise ContextError(f"invalid PostgreSQL setting names {invalid!r}")
+        if len(set(names)) != len(names):
+            raise ContextError("PostgreSQL setting names must be unique")
+
+    def info(self) -> dict[str, "SessionContext"]:
+        """Build the standard `Session.info` payload for these settings."""
+        return {_INFO_KEY: self}
+
+
+def configured_context(session: Session) -> SessionContext | None:
     """Return the row security context carried by a session."""
-    configured = session.info.get(INFO_KEY)
-    return configured if isinstance(configured, Context) else None
+    configured = session.info.get(_INFO_KEY)
+    return configured if isinstance(configured, SessionContext) else None
 
 
 def has_context(session: Session) -> bool:
