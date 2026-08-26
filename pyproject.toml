@@ -50,26 +50,6 @@ dev = [
   "ruff>=0.15,<0.16",
 ]
 
-[tool.chefe.workspace]
-platforms = ["linux-64"]
-
-[tool.chefe.conda]
-python = ">=3.14.6,<3.15"
-
-[tool.chefe.python]
-prerelease-mode = "allow"
-
-[tool.chefe.sources]
-patos = { provider = "path", path = "../patos", editable = true }
-sqlalchemy = { provider = "path", path = "../sqlalchemy", editable = true }
-
-[tool.chefe.tasks]
-build = "python -m build"
-lint = "ruff check rls tests && ruff format --check rls tests"
-typecheck = "mypy rls && pyrefly check"
-test = "python -m pytest"
-check = { run = "true", depends = ["lint", "typecheck", "test", "build"] }
-
 [project.entry-points."alembic.plugins"]
 rls = "rls.plugin:plugins"
 
@@ -85,7 +65,6 @@ files = ["rls"]
 [tool.pyrefly]
 project-includes = ["rls", "tests"]
 search-path = [".", "tests", "../patos/src"]
-python-interpreter-path = "../../.chefe/.pixi/envs/default/bin/python"
 
 [tool.ruff]
 line-length = 99
